@@ -1,0 +1,56 @@
+{
+  "Status": {
+    "Module": 0,
+    "DeviceName": "KC868-A4",
+    "FriendlyName": ["Relay1", "Relay2", "Relay3", "Relay4"],
+    "Topic": "tasmota_XXXXXX",
+    "Power": "0000"
+  },
+  "StatusPRM": {
+    "Uptime": "0T01:23:45",
+    "StartupUTC": "2026-03-06T00:00:00",
+    "RestartReason": "Software/System restart"
+  },
+  "StatusFWR": {
+    "Version": "15.3.0(release-tasmota32)",
+    "BuildDateTime": "2026-02-15T12:00:00"
+  },
+  "StatusNET": {
+    "Hostname": "tasmota-XXXXXX-XXXX",
+    "IPAddress": "192.168.0.90",
+    "Mac": "AA:BB:CC:DD:EE:FF",
+    "Webserver": 2,
+    "Gateway": "192.168.0.1",
+    "Subnetmask": "255.255.255.0",
+    "DNSServer1": "192.168.0.1"
+  },
+  "StatusSTS": {
+    "Time": "2026-03-06T01:23:10",
+    "Uptime": "0T01:23:45",
+    "UptimeSec": 5025,
+    "POWER1": "OFF",
+    "POWER2": "OFF",
+    "POWER3": "OFF",
+    "POWER4": "OFF",
+    "Wifi": {
+      "AP": 1,
+      "SSId": "MyWiFi",
+      "BSSId": "AA:BB:CC:DD:EE:FF",
+      "Channel": 6,
+      "Mode": "11n",
+      "RSSI": 44,
+      "Signal": -78,
+      "LinkCount": 1,
+      "Downtime": "0T00:00:03"
+    }
+  },
+  "StatusSNS": {
+    "Time": "2026-03-06T01:23:10",
+    "ANALOG": {
+      "A1": 176,
+      "A2": 176,
+      "A3": 176,
+      "A4": 176
+    }
+  }
+}

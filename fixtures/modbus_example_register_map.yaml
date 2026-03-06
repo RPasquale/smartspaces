@@ -1,0 +1,116 @@
+description: "Example Modbus register map for a pump controller"
+device_name: "Pump Controller PLC"
+unit_id_default: 1
+
+registers:
+  - point_id: "pump1.run_cmd"
+    unit_id: 1
+    table: coil
+    address: 0
+    data_type: bool
+    readable: true
+    writable: true
+    point_class: "pump.command"
+    safety_class: "S3"
+    semantic_tags: [pump, command]
+    verification:
+      readback: true
+      delay_ms: 500
+
+  - point_id: "pump1.running"
+    unit_id: 1
+    table: discrete_input
+    address: 0
+    data_type: bool
+    readable: true
+    writable: false
+    point_class: "pump.status"
+    safety_class: "S0"
+    semantic_tags: [pump, status]
+
+  - point_id: "pump1.speed_setpoint"
+    unit_id: 1
+    table: holding_register
+    address: 40001
+    data_type: uint16
+    scale: 0.1
+    offset: 0
+    unit: "Hz"
+    readable: true
+    writable: true
+    point_class: "setpoint.frequency"
+    safety_class: "S3"
+    semantic_tags: [pump, speed, setpoint]
+    verification:
+      readback: true
+      delay_ms: 250
+
+  - point_id: "pump1.actual_speed"
+    unit_id: 1
+    table: input_register
+    address: 30001
+    data_type: uint16
+    scale: 0.1
+    offset: 0
+    unit: "Hz"
+    readable: true
+    writable: false
+    point_class: "analog_input.frequency"
+    safety_class: "S0"
+    semantic_tags: [pump, speed, actual]
+
+  - point_id: "pump1.motor_current"
+    unit_id: 1
+    table: input_register
+    address: 30002
+    data_type: uint16
+    scale: 0.01
+    offset: 0
+    unit: "A"
+    readable: true
+    writable: false
+    point_class: "analog_input.current"
+    safety_class: "S0"
+    semantic_tags: [pump, current, motor]
+
+  - point_id: "pump1.motor_temp"
+    unit_id: 1
+    table: input_register
+    address: 30003
+    data_type: int16
+    scale: 0.1
+    offset: 0
+    unit: "C"
+    readable: true
+    writable: false
+    point_class: "temperature.celsius"
+    safety_class: "S0"
+    semantic_tags: [pump, temperature, motor]
+
+  - point_id: "valve3.open_cmd"
+    unit_id: 2
+    table: coil
+    address: 2
+    data_type: bool
+    readable: true
+    writable: true
+    point_class: "valve.command"
+    safety_class: "S3"
+    semantic_tags: [valve, command]
+    verification:
+      readback: true
+      delay_ms: 1000
+
+  - point_id: "valve3.position"
+    unit_id: 2
+    table: input_register
+    address: 30010
+    data_type: uint16
+    scale: 1
+    offset: 0
+    unit: "%"
+    readable: true
+    writable: false
+    point_class: "valve.position_pct"
+    safety_class: "S0"
+    semantic_tags: [valve, position]

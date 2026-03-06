@@ -1,0 +1,96 @@
+board_id: kc868_a4
+display_name: "KC868-A4"
+manufacturer: "KinCony"
+mcu: "ESP32-D0WD-V3"
+flash_mb: 4
+
+relays: 4
+digital_inputs: 4
+analog_inputs: 4
+analog_outputs: 2
+ir_tx: true
+ir_rx: true
+rf_tx: false
+rf_rx: false
+rs485: false
+can: false
+serial_ports: 1
+
+supported_firmware:
+  - tasmota
+  - kcs_v3
+  - esphome
+  - custom_http
+
+default_safety_class: "S2"
+
+gpio_map:
+  relay_1: {gpio: 4, tasmota_code: 224}
+  relay_2: {gpio: 5, tasmota_code: 225}
+  relay_3: {gpio: 11, tasmota_code: 226}
+  relay_4: {gpio: 2, tasmota_code: 227}
+  digital_input_1: {gpio: 18, tasmota_code: 1056}
+  digital_input_2: {gpio: 19, tasmota_code: 1088}
+  digital_input_3: {gpio: 17, tasmota_code: 1120}
+  digital_input_4: {gpio: 15, tasmota_code: 1152}
+  analog_input_1: {gpio: 30, tasmota_code: 4704}
+  analog_input_2: {gpio: 31, tasmota_code: 4705}
+  analog_input_3: {gpio: 28, tasmota_code: 4706}
+  analog_input_4: {gpio: 29, tasmota_code: 4707}
+  ir_send: {gpio: 9, tasmota_code: 1312}
+  ir_recv: {gpio: 14, tasmota_code: 480}
+  dac_1: {gpio: 25}
+  dac_2: {gpio: 26}
+  button_s2: {gpio: 0, tasmota_code: 32}
+
+tasmota_template: '{"NAME":"KC868-A4","GPIO":[32,0,227,0,224,225,0,0,0,1312,1,226,0,0,480,1152,0,1120,1056,1088,0,1,1,1,0,0,0,0,4706,4707,4704,4705,1,0,0,1],"FLAG":0,"BASE":1}'
+
+power_requirements:
+  voltage_dc: 12
+  note: "USB alone powers ESP32 but not relay coils"
+
+relay_specs:
+  max_current_a: 10
+  max_voltage_ac: 250
+  contacts: ["COM", "NO", "NC"]
+
+input_specs:
+  digital_voltage_range: "5-24V DC"
+  analog_voltage_range: "0-3.3V"
+  analog_resolution_bits: 12
+
+endpoints:
+  - id: "relay/{n}"
+    count: 4
+    type: relay_channel
+    direction: read_write
+    capabilities: [relay_output, binary_switch]
+    safety_class: S2
+
+  - id: "digital_input/{n}"
+    count: 4
+    type: digital_input_channel
+    direction: read
+    capabilities: [digital_input, binary_sensor]
+    safety_class: S0
+
+  - id: "analog_input/{n}"
+    count: 4
+    type: analog_input_channel
+    direction: read
+    capabilities: [analog_input]
+    safety_class: S0
+
+  - id: "ir_tx/1"
+    count: 1
+    type: ir_transmitter
+    direction: write
+    capabilities: [ir_transmit]
+    safety_class: S1
+
+  - id: "ir_rx/1"
+    count: 1
+    type: ir_receiver
+    direction: event_only
+    capabilities: [binary_sensor]
+    safety_class: S0

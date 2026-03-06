@@ -1,0 +1,55 @@
+adapter_api: "1.0"
+id: "kincony.family"
+display_name: "KinCony ESP32 Relay Boards"
+vendor: "KinCony"
+version: "0.1.0"
+adapter_class: "direct_device"
+runtime: "python"
+supports:
+  discovery: [http_probe, manual_ip]
+  auth: [none, password]
+  inventory: true
+  read: true
+  write: true
+  subscribe: false
+  batch_commands: true
+  scenes: false
+  schedules: false
+  optimization_hints: true
+transports:
+  - http
+  - mqtt
+  - serial
+device_families:
+  - relay_board
+  - io_board
+capability_families:
+  - relay_output
+  - binary_switch
+  - digital_input
+  - binary_sensor
+  - analog_input
+  - ir_transmit
+connection_templates:
+  - id: "tasmota_http"
+    display_name: "Tasmota HTTP (LAN)"
+    required_fields: [host]
+    optional_fields: [board_id]
+    secret_fields: [password]
+    discovery_methods: [http_probe, manual_ip]
+  - id: "tasmota_mqtt"
+    display_name: "Tasmota MQTT"
+    required_fields: [broker_host, topic]
+    secret_fields: [mqtt_username, mqtt_password]
+    discovery_methods: [mqtt_discovery]
+compatibility:
+  firmware_ranges:
+    - "tasmota >= 13.0"
+  known_limitations:
+    - "HTTP transport does not support push subscriptions"
+    - "Digital input state requires polling"
+  safety_notes:
+    - "Relay outputs default to S2 safety class"
+    - "Relays controlling mains/pumps/gates should be upgraded to S3"
+  transport_fallbacks:
+    - "http -> mqtt -> serial"

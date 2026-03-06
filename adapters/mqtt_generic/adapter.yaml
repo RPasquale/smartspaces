@@ -1,0 +1,43 @@
+adapter_api: "1.0"
+id: "mqtt.generic"
+display_name: "Generic MQTT"
+vendor: "Generic"
+version: "0.1.0"
+adapter_class: "bus"
+runtime: "python"
+supports:
+  discovery: [mqtt_discovery]
+  auth: [none, username_password]
+  inventory: true
+  read: true
+  write: true
+  subscribe: true
+  batch_commands: false
+  scenes: false
+  schedules: false
+transports:
+  - mqtt
+device_families:
+  - any
+capability_families:
+  - binary_switch
+  - binary_sensor
+  - dimmer
+  - cover
+  - thermostat
+  - analog_input
+  - meter_power
+  - meter_energy
+connection_templates:
+  - id: "broker_auto"
+    display_name: "MQTT Broker (auto-discovery)"
+    required_fields: [broker_host]
+    optional_fields: [broker_port, discovery_prefix]
+    secret_fields: [username, password]
+    discovery_methods: [mqtt_discovery]
+compatibility:
+  known_limitations:
+    - "Requires HA-style MQTT auto-discovery payloads for automatic inventory"
+    - "Manual topic mapping needed for non-discoverable devices"
+  safety_notes:
+    - "MQTT command topics can be loosely specified — payload validation is strict"

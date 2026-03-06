@@ -1,0 +1,48 @@
+adapter_api: "1.0"
+id: "hue.bridge"
+display_name: "Philips Hue Bridge"
+vendor: "Signify"
+version: "0.1.0"
+adapter_class: "bridge"
+runtime: "python"
+supports:
+  discovery: [mdns, http_probe, manual_ip]
+  auth: [api_key, link_button_pairing]
+  inventory: true
+  read: true
+  write: true
+  subscribe: true
+  batch_commands: false
+  scenes: true
+  schedules: false
+  optimization_hints: true
+transports:
+  - https
+device_families:
+  - light
+  - sensor
+  - button
+capability_families:
+  - binary_switch
+  - dimmer
+  - light_color
+  - motion
+  - temperature_sensor
+  - scene_member
+  - scene_controller
+connection_templates:
+  - id: "bridge_api_key"
+    display_name: "Hue Bridge (API key)"
+    required_fields: [host]
+    secret_fields: [api_key]
+    discovery_methods: [mdns, http_probe]
+    physical_actions:
+      - "Press link button on Hue Bridge"
+compatibility:
+  firmware_ranges:
+    - "BSB002 >= 1948086000"
+  known_limitations:
+    - "SSE eventstream not yet implemented (polling fallback)"
+    - "Entertainment streaming not supported"
+  safety_notes:
+    - "All lights default to S1 safety class"

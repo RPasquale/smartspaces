@@ -1,0 +1,52 @@
+adapter_api: "1.0"
+id: "modbus.generic"
+display_name: "Generic Modbus TCP/RTU"
+vendor: "Generic"
+version: "0.1.0"
+adapter_class: "bus"
+runtime: "python"
+supports:
+  discovery: []
+  auth: [none]
+  inventory: true
+  read: true
+  write: true
+  subscribe: false
+  batch_commands: true
+  scenes: false
+  schedules: false
+  optimization_hints: true
+transports:
+  - modbus_tcp
+  - modbus_rtu
+device_families:
+  - industrial
+  - plc
+  - rtu
+  - meter
+capability_families:
+  - analog_input
+  - analog_output
+  - digital_input
+  - digital_output
+  - meter_power
+  - meter_energy
+  - setpoint
+  - valve
+  - pump
+connection_templates:
+  - id: "tcp"
+    display_name: "Modbus TCP"
+    required_fields: [host, port]
+    optional_fields: [unit_ids]
+    files_to_upload: [register_map]
+    discovery_methods: []
+compatibility:
+  known_limitations:
+    - "Poll-only — no event subscriptions"
+    - "Requires register map for meaningful inventory"
+    - "RTU mode not yet implemented"
+  safety_notes:
+    - "Default safety class S3 for Modbus devices"
+    - "Writable registers should be reviewed before commissioning"
+    - "Select-before-operate pattern recommended for critical outputs"

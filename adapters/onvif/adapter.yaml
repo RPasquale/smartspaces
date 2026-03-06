@@ -1,0 +1,44 @@
+adapter_api: "1.0"
+id: "onvif.camera"
+display_name: "ONVIF Camera/NVR"
+vendor: "Generic"
+version: "0.1.0"
+adapter_class: "bridge"
+runtime: "python"
+supports:
+  discovery: [ws_discovery, http_probe, manual_ip]
+  auth: [username_password]
+  inventory: true
+  read: true
+  write: false
+  subscribe: false
+  batch_commands: false
+  scenes: false
+  schedules: false
+transports:
+  - http
+  - rtsp
+device_families:
+  - camera
+  - nvr
+capability_families:
+  - camera_stream
+  - camera_snapshot
+  - camera_motion
+  - ptz
+  - motion
+connection_templates:
+  - id: "onvif_camera"
+    display_name: "ONVIF Camera (LAN)"
+    required_fields: [host]
+    optional_fields: [port]
+    secret_fields: [username, password]
+    discovery_methods: [ws_discovery, http_probe]
+compatibility:
+  known_limitations:
+    - "WS-BaseNotification events not yet implemented"
+    - "PTZ control not yet implemented"
+    - "SOAP-based ONVIF profile parsing is simplified"
+  safety_notes:
+    - "Camera credentials are high-value secrets"
+    - "Stream URIs should not be exposed to untrusted consumers"

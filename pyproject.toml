@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "physical-space-adapters"
+version = "0.1.0"
+description = "Universal adapter SDK for physical space device control"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+kincony = ["requests>=2.31"]
+shelly = []
+mqtt = ["paho-mqtt>=2.0"]
+modbus = ["pymodbus>=3.6"]
+hue = []
+onvif = ["onvif-zeep>=0.2"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["sdk", "adapters"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests", "sdk/adapter_api/contract_tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

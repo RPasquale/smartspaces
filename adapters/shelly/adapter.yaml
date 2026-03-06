@@ -1,0 +1,55 @@
+adapter_api: "1.0"
+id: "shelly.gen2"
+display_name: "Shelly Gen2+/Pro"
+vendor: "Shelly"
+version: "0.1.0"
+adapter_class: "direct_device"
+runtime: "python"
+supports:
+  discovery: [mdns, http_probe, manual_ip]
+  auth: [digest, none]
+  inventory: true
+  read: true
+  write: true
+  subscribe: true
+  batch_commands: false
+  scenes: false
+  schedules: false
+  optimization_hints: true
+transports:
+  - http
+  - websocket
+  - mqtt
+device_families:
+  - relay
+  - switch
+  - dimmer
+  - cover
+  - power_meter
+  - input
+capability_families:
+  - binary_switch
+  - relay_output
+  - digital_input
+  - dimmer
+  - cover
+  - meter_power
+  - meter_energy
+connection_templates:
+  - id: "open_lan"
+    display_name: "Local LAN (no auth)"
+    required_fields: [host]
+    discovery_methods: [mdns, http_probe]
+  - id: "digest_lan"
+    display_name: "Local LAN (Digest Auth)"
+    required_fields: [host]
+    secret_fields: [password]
+    discovery_methods: [mdns, http_probe]
+compatibility:
+  firmware_ranges:
+    - "gen2 >= 0.14"
+    - "gen3 >= 1.0"
+  known_limitations:
+    - "Gen1 devices not supported (use Shelly Gen1 adapter)"
+  safety_notes:
+    - "Default safety class S1 for all switch outputs"
