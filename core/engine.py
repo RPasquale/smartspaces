@@ -210,6 +210,60 @@ def main():
     except ImportError:
         pass
 
+    try:
+        from adapters.esphome import ESPHomeAdapter
+        adapters_to_register.append(ESPHomeAdapter())
+    except ImportError:
+        pass
+
+    try:
+        from adapters.zigbee import ZigbeeAdapter
+        adapters_to_register.append(ZigbeeAdapter())
+    except ImportError:
+        pass
+
+    try:
+        from adapters.zwave import ZWaveAdapter
+        adapters_to_register.append(ZWaveAdapter())
+    except ImportError:
+        pass
+
+    try:
+        from adapters.matter import MatterAdapter
+        adapters_to_register.append(MatterAdapter())
+    except ImportError:
+        pass
+
+    try:
+        from adapters.lutron import LutronAdapter
+        adapters_to_register.append(LutronAdapter())
+    except ImportError:
+        pass
+
+    try:
+        from adapters.knx import KnxAdapter
+        adapters_to_register.append(KnxAdapter())
+    except ImportError:
+        pass
+
+    try:
+        from adapters.bacnet import BacnetAdapter
+        adapters_to_register.append(BacnetAdapter())
+    except ImportError:
+        pass
+
+    try:
+        from adapters.opcua import OpcUaAdapter
+        adapters_to_register.append(OpcUaAdapter())
+    except ImportError:
+        pass
+
+    try:
+        from adapters.dnp3 import Dnp3Adapter
+        adapters_to_register.append(Dnp3Adapter())
+    except ImportError:
+        pass
+
     if not adapters_to_register:
         logger.error("No adapters available")
         sys.exit(1)

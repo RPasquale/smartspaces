@@ -1,0 +1,52 @@
+adapter_api: "1.0"
+id: "matter.python"
+display_name: "Matter (CHIP)"
+vendor: "CSA"
+version: "0.1.0"
+adapter_class: "network_controller"
+runtime: "python"
+supports:
+  discovery: [mdns, manual_ip]
+  auth: [none, pin]
+  inventory: true
+  read: true
+  write: true
+  subscribe: true
+  batch_commands: false
+transports:
+  - matter
+  - http
+device_families:
+  - light
+  - switch
+  - plug
+  - sensor
+  - lock
+  - thermostat
+  - cover
+  - fan
+capability_families:
+  - binary_switch
+  - dimmer
+  - light_color
+  - binary_sensor
+  - analog_input
+  - temperature_sensor
+  - humidity_sensor
+  - thermostat
+  - cover
+  - fan
+  - lock
+  - meter_power
+connection_templates:
+  - id: "matter_server"
+    display_name: "Matter Server (python-matter-server)"
+    required_fields: [host]
+    optional_fields: [port]
+    discovery_methods: [mdns, manual_ip]
+compatibility:
+  known_limitations:
+    - "Requires python-matter-server running separately"
+    - "Commissioning new Matter devices requires physical interaction"
+  safety_notes:
+    - "S2 for locks/climate, S1 for actuators, S0 for sensors"

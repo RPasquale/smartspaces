@@ -1,0 +1,44 @@
+adapter_api: "1.0"
+id: "opcua.client"
+display_name: "OPC UA Client"
+vendor: "OPC Foundation"
+version: "0.1.0"
+adapter_class: "server"
+runtime: "python"
+supports:
+  discovery: [manual_url]
+  auth: [none, username_password, certificate]
+  inventory: true
+  read: true
+  write: true
+  subscribe: true
+  batch_commands: true
+transports:
+  - opcua_tcp
+device_families:
+  - plc
+  - scada
+  - hmi
+  - sensor
+  - actuator
+capability_families:
+  - analog_input
+  - analog_output
+  - binary_input
+  - binary_output
+  - temperature_sensor
+  - meter_power
+  - setpoint
+connection_templates:
+  - id: "opcua_server"
+    display_name: "OPC UA Server"
+    required_fields: [endpoint_url]
+    secret_fields: [username, password]
+    discovery_methods: [manual_url]
+compatibility:
+  known_limitations:
+    - "Requires asyncua library for full OPC UA client"
+    - "Certificate-based auth not yet implemented"
+    - "Only flat node browsing supported"
+  safety_notes:
+    - "S3+ for industrial control, S1 for monitoring, S0 for read-only"

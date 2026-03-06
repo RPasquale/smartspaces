@@ -1,0 +1,53 @@
+adapter_api: "1.0"
+id: "zwave.zwave_js"
+display_name: "Z-Wave JS"
+vendor: "Z-Wave JS"
+version: "0.1.0"
+adapter_class: "network_controller"
+runtime: "python"
+supports:
+  discovery: [http_probe, manual_ip]
+  auth: [none]
+  inventory: true
+  read: true
+  write: true
+  subscribe: true
+  batch_commands: false
+transports:
+  - websocket
+  - http
+device_families:
+  - switch
+  - light
+  - sensor
+  - lock
+  - thermostat
+  - cover
+  - fan
+  - meter
+capability_families:
+  - binary_switch
+  - dimmer
+  - light_color
+  - binary_sensor
+  - analog_input
+  - temperature_sensor
+  - humidity_sensor
+  - thermostat
+  - cover
+  - fan
+  - lock
+  - meter_power
+  - door_lock
+connection_templates:
+  - id: "zwavejs_ws"
+    display_name: "Z-Wave JS WebSocket"
+    required_fields: [host]
+    optional_fields: [port]
+    discovery_methods: [http_probe, manual_ip]
+compatibility:
+  known_limitations:
+    - "Requires Z-Wave JS server running separately"
+    - "WebSocket event stream not yet implemented"
+  safety_notes:
+    - "S2 for locks, S1 for switches/dimmers, S0 for sensors"

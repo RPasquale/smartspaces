@@ -1,0 +1,50 @@
+adapter_api: "1.0"
+id: "bacnet.ip"
+display_name: "BACnet/IP"
+vendor: "ASHRAE"
+version: "0.1.0"
+adapter_class: "bus"
+runtime: "python"
+supports:
+  discovery: [whois, manual_ip]
+  auth: [none]
+  inventory: true
+  read: true
+  write: true
+  subscribe: true
+  batch_commands: true
+transports:
+  - bacnet_ip
+  - bacnet_mstp
+device_families:
+  - ahu
+  - vav
+  - chiller
+  - boiler
+  - meter
+  - sensor
+  - controller
+capability_families:
+  - analog_input
+  - analog_output
+  - binary_input
+  - binary_output
+  - temperature_sensor
+  - thermostat
+  - climate_setpoint
+  - meter_power
+  - fan
+  - cover
+connection_templates:
+  - id: "bacnet_ip"
+    display_name: "BACnet/IP Device"
+    required_fields: [host]
+    optional_fields: [port, device_instance]
+    discovery_methods: [whois, manual_ip]
+compatibility:
+  known_limitations:
+    - "Requires BAC0 or bacpypes library for full BACnet stack"
+    - "MSTP transport not yet supported"
+    - "COV subscriptions not yet implemented"
+  safety_notes:
+    - "S2 for HVAC setpoints, S1 for outputs, S0 for inputs"

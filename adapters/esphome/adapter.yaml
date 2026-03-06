@@ -1,0 +1,49 @@
+adapter_api: "1.0"
+id: "esphome.native"
+display_name: "ESPHome Nodes"
+vendor: "ESPHome"
+version: "0.1.0"
+adapter_class: "direct_device"
+runtime: "python"
+supports:
+  discovery: [mdns, http_probe, manual_ip]
+  auth: [none, password]
+  inventory: true
+  read: true
+  write: true
+  subscribe: false
+  batch_commands: false
+transports:
+  - http
+  - native_api
+  - mqtt
+device_families:
+  - switch
+  - light
+  - sensor
+  - climate
+  - cover
+  - fan
+capability_families:
+  - binary_switch
+  - dimmer
+  - light_color
+  - binary_sensor
+  - analog_input
+  - thermostat
+  - cover
+  - fan
+  - setpoint
+  - lock
+connection_templates:
+  - id: "rest_http"
+    display_name: "ESPHome REST API"
+    required_fields: [host]
+    secret_fields: [password]
+    discovery_methods: [mdns, http_probe]
+compatibility:
+  known_limitations:
+    - "REST API requires web_server component in ESPHome config"
+    - "Native API integration not yet implemented"
+  safety_notes:
+    - "Default S1 for switches, S2 for climate"

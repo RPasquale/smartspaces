@@ -1,0 +1,44 @@
+adapter_api: "1.0"
+id: "dnp3.master"
+display_name: "DNP3 Master"
+vendor: "IEEE"
+version: "0.1.0"
+adapter_class: "bus"
+runtime: "python"
+supports:
+  discovery: [manual_ip]
+  auth: [none, secure_authentication]
+  inventory: true
+  read: true
+  write: true
+  subscribe: true
+  batch_commands: true
+transports:
+  - dnp3_tcp
+  - dnp3_serial
+device_families:
+  - rtu
+  - ied
+  - meter
+  - relay
+  - controller
+capability_families:
+  - analog_input
+  - analog_output
+  - binary_input
+  - binary_output
+  - counter
+  - frozen_counter
+connection_templates:
+  - id: "dnp3_tcp"
+    display_name: "DNP3 TCP Outstation"
+    required_fields: [host, outstation_address]
+    optional_fields: [port, master_address]
+    discovery_methods: [manual_ip]
+compatibility:
+  known_limitations:
+    - "Requires pydnp3 or opendnp3 library for full DNP3 stack"
+    - "Secure Authentication v5 not yet implemented"
+    - "Serial transport not yet supported"
+  safety_notes:
+    - "S3+ for utility/SCADA control, S1 for monitoring"

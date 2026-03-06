@@ -1,0 +1,43 @@
+adapter_api: "1.0"
+id: "lutron.caseta"
+display_name: "Lutron Caseta / RadioRA"
+vendor: "Lutron"
+version: "0.1.0"
+adapter_class: "bridge"
+runtime: "python"
+supports:
+  discovery: [mdns, manual_ip]
+  auth: [certificate]
+  inventory: true
+  read: true
+  write: true
+  subscribe: false
+  batch_commands: false
+transports:
+  - leap
+  - http
+device_families:
+  - switch
+  - dimmer
+  - shade
+  - fan
+  - occupancy_sensor
+  - pico_remote
+capability_families:
+  - binary_switch
+  - dimmer
+  - cover
+  - fan
+  - binary_sensor
+connection_templates:
+  - id: "caseta_leap"
+    display_name: "Lutron Smart Bridge (LEAP)"
+    required_fields: [host]
+    secret_fields: [client_cert, client_key, ca_cert]
+    discovery_methods: [mdns, manual_ip]
+compatibility:
+  known_limitations:
+    - "LEAP TLS pairing requires one-time certificate exchange"
+    - "Pico remotes are event-only, not controllable"
+  safety_notes:
+    - "S1 for dimmers/switches/shades, S0 for sensors"

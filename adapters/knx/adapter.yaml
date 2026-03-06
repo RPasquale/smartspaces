@@ -1,0 +1,46 @@
+adapter_api: "1.0"
+id: "knx.ip"
+display_name: "KNX/IP"
+vendor: "KNX Association"
+version: "0.1.0"
+adapter_class: "bus"
+runtime: "python"
+supports:
+  discovery: [knx_search, manual_ip]
+  auth: [none]
+  inventory: true
+  read: true
+  write: true
+  subscribe: true
+  batch_commands: false
+transports:
+  - knx_tunneling
+  - knx_routing
+device_families:
+  - switch
+  - dimmer
+  - blind
+  - sensor
+  - hvac
+  - meter
+capability_families:
+  - binary_switch
+  - dimmer
+  - cover
+  - binary_sensor
+  - analog_input
+  - temperature_sensor
+  - thermostat
+  - meter_power
+connection_templates:
+  - id: "knx_tunnel"
+    display_name: "KNX/IP Tunneling"
+    required_fields: [host]
+    optional_fields: [port]
+    discovery_methods: [knx_search, manual_ip]
+compatibility:
+  known_limitations:
+    - "Requires xknx library for full KNX/IP support"
+    - "Group address mapping must be provided via project export"
+  safety_notes:
+    - "S1 for actuators, S0 for sensors, S2 for HVAC"

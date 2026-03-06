@@ -1,0 +1,52 @@
+adapter_api: "1.0"
+id: "zigbee.z2m"
+display_name: "Zigbee2MQTT"
+vendor: "Zigbee2MQTT"
+version: "0.1.0"
+adapter_class: "network_controller"
+runtime: "python"
+supports:
+  discovery: [http_probe, manual_ip]
+  auth: [none]
+  inventory: true
+  read: true
+  write: true
+  subscribe: false
+  batch_commands: false
+transports:
+  - http
+  - mqtt
+device_families:
+  - light
+  - switch
+  - plug
+  - sensor
+  - lock
+  - cover
+  - fan
+  - climate
+capability_families:
+  - binary_switch
+  - dimmer
+  - light_color
+  - binary_sensor
+  - analog_input
+  - temperature_sensor
+  - humidity_sensor
+  - thermostat
+  - cover
+  - fan
+  - lock
+  - meter_power
+connection_templates:
+  - id: "z2m_http"
+    display_name: "Zigbee2MQTT HTTP"
+    required_fields: [host]
+    optional_fields: [port]
+    discovery_methods: [http_probe, manual_ip]
+compatibility:
+  known_limitations:
+    - "Subscribe requires MQTT broker connection (not yet implemented)"
+    - "Read point returns stale data; use MQTT for real-time state"
+  safety_notes:
+    - "Default S1 for actuators, S0 for sensors, S2 for locks/climate"
