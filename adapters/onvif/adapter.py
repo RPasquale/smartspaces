@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
+from xml.sax.saxutils import escape as xml_escape
 
 import httpx
 
@@ -43,13 +44,15 @@ class _OnvifConnection:
 
     async def soap_request(self, url: str, body: str) -> str:
         """Send a SOAP request and return the response body."""
+        safe_user = xml_escape(self.username)
+        safe_pass = xml_escape(self.password)
         envelope = f"""<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">
   <s:Header>
     <Security xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
       <UsernameToken>
-        <Username>{self.username}</Username>
-        <Password>{self.password}</Password>
+        <Username>{safe_user}</Username>
+        <Password>{safe_pass}</Password>
       </UsernameToken>
     </Security>
   </s:Header>
@@ -80,6 +83,7 @@ class _OnvifConnection:
             return {}
 
     async def get_stream_uri(self, profile_token: str) -> str:
+        safe_token = xml_escape(profile_token)
         body = f"""<GetStreamUri xmlns="http://www.onvif.org/ver10/media/wsdl">
   <StreamSetup>
     <Stream xmlns="http://www.onvif.org/ver10/schema">RTP-Unicast</Stream>
@@ -87,7 +91,7 @@ class _OnvifConnection:
       <Protocol>RTSP</Protocol>
     </Transport>
   </StreamSetup>
-  <ProfileToken>{profile_token}</ProfileToken>
+  <ProfileToken>{safe_token}</ProfileToken>
 </GetStreamUri>"""
         try:
             resp_text = await self.soap_request(self.media_url, body)

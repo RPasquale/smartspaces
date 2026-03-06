@@ -174,95 +174,34 @@ def main():
     # Import and register all adapters
     adapters_to_register: list[Adapter] = []
 
-    try:
-        from adapters.kincony import KinConyAdapter
-        adapters_to_register.append(KinConyAdapter())
-    except ImportError:
-        pass
+    _ADAPTER_IMPORTS = [
+        ("adapters.kincony", "KinConyAdapter"),
+        ("adapters.shelly", "ShellyAdapter"),
+        ("adapters.mqtt_generic", "MqttGenericAdapter"),
+        ("adapters.modbus", "ModbusAdapter"),
+        ("adapters.hue", "HueAdapter"),
+        ("adapters.onvif", "OnvifAdapter"),
+        ("adapters.esphome", "ESPHomeAdapter"),
+        ("adapters.zigbee", "ZigbeeAdapter"),
+        ("adapters.zwave", "ZWaveAdapter"),
+        ("adapters.matter", "MatterAdapter"),
+        ("adapters.lutron", "LutronAdapter"),
+        ("adapters.knx", "KnxAdapter"),
+        ("adapters.bacnet", "BacnetAdapter"),
+        ("adapters.opcua", "OpcUaAdapter"),
+        ("adapters.dnp3", "Dnp3Adapter"),
+    ]
 
-    try:
-        from adapters.shelly import ShellyAdapter
-        adapters_to_register.append(ShellyAdapter())
-    except ImportError:
-        pass
-
-    try:
-        from adapters.mqtt_generic import MqttGenericAdapter
-        adapters_to_register.append(MqttGenericAdapter())
-    except ImportError:
-        pass
-
-    try:
-        from adapters.modbus import ModbusAdapter
-        adapters_to_register.append(ModbusAdapter())
-    except ImportError:
-        pass
-
-    try:
-        from adapters.hue import HueAdapter
-        adapters_to_register.append(HueAdapter())
-    except ImportError:
-        pass
-
-    try:
-        from adapters.onvif import OnvifAdapter
-        adapters_to_register.append(OnvifAdapter())
-    except ImportError:
-        pass
-
-    try:
-        from adapters.esphome import ESPHomeAdapter
-        adapters_to_register.append(ESPHomeAdapter())
-    except ImportError:
-        pass
-
-    try:
-        from adapters.zigbee import ZigbeeAdapter
-        adapters_to_register.append(ZigbeeAdapter())
-    except ImportError:
-        pass
-
-    try:
-        from adapters.zwave import ZWaveAdapter
-        adapters_to_register.append(ZWaveAdapter())
-    except ImportError:
-        pass
-
-    try:
-        from adapters.matter import MatterAdapter
-        adapters_to_register.append(MatterAdapter())
-    except ImportError:
-        pass
-
-    try:
-        from adapters.lutron import LutronAdapter
-        adapters_to_register.append(LutronAdapter())
-    except ImportError:
-        pass
-
-    try:
-        from adapters.knx import KnxAdapter
-        adapters_to_register.append(KnxAdapter())
-    except ImportError:
-        pass
-
-    try:
-        from adapters.bacnet import BacnetAdapter
-        adapters_to_register.append(BacnetAdapter())
-    except ImportError:
-        pass
-
-    try:
-        from adapters.opcua import OpcUaAdapter
-        adapters_to_register.append(OpcUaAdapter())
-    except ImportError:
-        pass
-
-    try:
-        from adapters.dnp3 import Dnp3Adapter
-        adapters_to_register.append(Dnp3Adapter())
-    except ImportError:
-        pass
+    import importlib
+    for module_path, class_name in _ADAPTER_IMPORTS:
+        try:
+            mod = importlib.import_module(module_path)
+            cls = getattr(mod, class_name)
+            adapters_to_register.append(cls())
+        except ImportError as e:
+            logger.warning("Adapter %s unavailable (missing dependency: %s)", class_name, e)
+        except Exception as e:
+            logger.warning("Failed to load adapter %s: %s", class_name, e)
 
     if not adapters_to_register:
         logger.error("No adapters available")

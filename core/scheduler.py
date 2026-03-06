@@ -17,6 +17,9 @@ from core.state_store import StateStore
 
 logger = logging.getLogger(__name__)
 
+POLL_TIMEOUT = 15.0  # Max seconds to wait for a single read_point call
+RECOVERY_INTERVAL = 300.0  # Auto-retry suspended points every 5 minutes
+
 
 @dataclass
 class PollTarget:
@@ -27,6 +30,7 @@ class PollTarget:
     last_polled: float = 0.0
     consecutive_errors: int = 0
     max_errors: int = 5
+    suspended_at: float = 0.0
 
 
 class Scheduler:
@@ -47,7 +51,7 @@ class Scheduler:
         self._read_fn: Any = None  # Set by engine: async fn(connection_id, point_id) -> dict
         self._running = False
         self._task: asyncio.Task | None = None
-        self._stats = {"polls": 0, "successes": 0, "errors": 0}
+        self._stats = {"polls": 0, "successes": 0, "errors": 0, "timeouts": 0, "recoveries": 0}
 
     def set_read_fn(self, fn: Any) -> None:
         """Set the function used to read points. Typically registry.read_point."""
@@ -107,14 +111,28 @@ class Scheduler:
             except asyncio.CancelledError:
                 pass
             self._task = None
-        logger.info("Scheduler stopped (polls=%d ok=%d err=%d)",
-                     self._stats["polls"], self._stats["successes"], self._stats["errors"])
+        logger.info("Scheduler stopped (polls=%d ok=%d err=%d timeouts=%d)",
+                     self._stats["polls"], self._stats["successes"],
+                     self._stats["errors"], self._stats["timeouts"])
 
     async def _poll_loop(self) -> None:
         """Main polling loop. Checks which targets are due and reads them."""
         while self._running:
             try:
                 now = time.monotonic()
+
+                # Check for suspended targets due for auto-recovery
+                for t in self._targets.values():
+                    if (
+                        t.consecutive_errors >= t.max_errors
+                        and t.suspended_at > 0
+                        and (now - t.suspended_at) >= RECOVERY_INTERVAL
+                    ):
+                        logger.info("Auto-recovering suspended point %s", t.point_id)
+                        t.consecutive_errors = 0
+                        t.suspended_at = 0
+                        self._stats["recoveries"] += 1
+
                 due = [
                     t for t in self._targets.values()
                     if (now - t.last_polled) >= t.interval_sec
@@ -135,21 +153,40 @@ class Scheduler:
                 await asyncio.sleep(self.tick_interval)
 
     async def _poll_one(self, target: PollTarget) -> None:
-        """Poll a single point."""
+        """Poll a single point with timeout protection."""
         self._stats["polls"] += 1
         target.last_polled = time.monotonic()
 
         try:
-            result = await self._read_fn(target.connection_id, target.point_id)
+            await asyncio.wait_for(
+                self._read_fn(target.connection_id, target.point_id),
+                timeout=POLL_TIMEOUT,
+            )
             target.consecutive_errors = 0
             self._stats["successes"] += 1
-        except Exception as e:
+        except asyncio.TimeoutError:
+            target.consecutive_errors += 1
+            self._stats["timeouts"] += 1
+            logger.warning("Poll timeout for %s (%d/%d)",
+                         target.point_id, target.consecutive_errors, target.max_errors)
+            if target.consecutive_errors >= target.max_errors:
+                target.suspended_at = time.monotonic()
+                logger.warning("Point %s suspended after %d timeouts, will retry in %ds",
+                             target.point_id, target.max_errors, int(RECOVERY_INTERVAL))
+                self.event_bus.publish_nowait({
+                    "type": "point.quality_changed",
+                    "point_id": target.point_id,
+                    "connection_id": target.connection_id,
+                    "quality": {"status": "bad", "source_type": "polled", "comm_lost": True},
+                })
+        except Exception:
             target.consecutive_errors += 1
             self._stats["errors"] += 1
             if target.consecutive_errors >= target.max_errors:
+                target.suspended_at = time.monotonic()
                 logger.warning(
-                    "Point %s reached max poll errors (%d), suspending",
-                    target.point_id, target.max_errors,
+                    "Point %s reached max poll errors (%d), suspending. Will auto-retry in %ds.",
+                    target.point_id, target.max_errors, int(RECOVERY_INTERVAL),
                 )
                 self.event_bus.publish_nowait({
                     "type": "point.quality_changed",
@@ -163,12 +200,14 @@ class Scheduler:
         target = self._targets.get(point_id)
         if target:
             target.consecutive_errors = 0
+            target.suspended_at = 0
 
     def reset_all_errors(self, connection_id: str) -> None:
         """Reset all error counts for a connection."""
         for t in self._targets.values():
             if t.connection_id == connection_id:
                 t.consecutive_errors = 0
+                t.suspended_at = 0
 
     @property
     def stats(self) -> dict[str, Any]:

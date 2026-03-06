@@ -7,6 +7,7 @@ coordinates inventory persistence.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -28,6 +29,11 @@ from core.state_store import StateStore
 
 logger = logging.getLogger(__name__)
 
+COMMISSION_TIMEOUT = 30.0
+INVENTORY_TIMEOUT = 60.0
+EXECUTE_TIMEOUT = 30.0
+HEALTH_TIMEOUT = 10.0
+
 
 @dataclass
 class RegisteredAdapter:
@@ -42,6 +48,7 @@ class AdapterRegistry:
     def __init__(self, event_bus: EventBus, state_store: StateStore):
         self._adapters: dict[str, RegisteredAdapter] = {}
         self._connection_to_adapter: dict[str, str] = {}
+        self._lock = asyncio.Lock()
         self.event_bus = event_bus
         self.state_store = state_store
 
@@ -117,12 +124,24 @@ class AdapterRegistry:
     ) -> CommissionResult:
         """Commission a connection through an adapter and persist it."""
         adapter = self.get_adapter(adapter_id)
-        result = await adapter.commission(target, profile)
+
+        try:
+            result = await asyncio.wait_for(
+                adapter.commission(target, profile),
+                timeout=COMMISSION_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            return CommissionResult("", "failed", {"error": "Commission timed out"})
 
         if result.status == "ok" and result.connection_id:
             cid = result.connection_id
-            self._connection_to_adapter[cid] = adapter_id
-            self._adapters[adapter_id].connections.append(cid)
+            async with self._lock:
+                # Prevent double-commission race
+                if cid in self._connection_to_adapter:
+                    logger.warning("Connection %s already registered, skipping duplicate", cid)
+                    return result
+                self._connection_to_adapter[cid] = adapter_id
+                self._adapters[adapter_id].connections.append(cid)
 
             # Persist connection config
             await self.state_store.save_connection(
@@ -147,14 +166,7 @@ class AdapterRegistry:
         fields: dict[str, Any],
         secrets: dict[str, str] | None = None,
     ) -> CommissionResult:
-        """Simplified commissioning helper.
-
-        Args:
-            adapter_id: Which adapter to use.
-            profile_id: Connection profile ID (e.g. "tasmota_http").
-            fields: Connection fields (e.g. {"host": "192.168.1.100"}).
-            secrets: Optional dict of secret_name -> secret_value.
-        """
+        """Simplified commissioning helper."""
         secret_refs = [SecretRef(name=k, handle=v) for k, v in (secrets or {}).items()]
         profile = ConnectionProfile(profile_id=profile_id, fields=fields, secrets=secret_refs)
         return await self.commission(adapter_id, None, profile)
@@ -162,7 +174,14 @@ class AdapterRegistry:
     async def inventory(self, connection_id: str) -> InventorySnapshot:
         """Run inventory and persist results."""
         adapter = self.get_adapter_for_connection(connection_id)
-        snapshot = await adapter.inventory(connection_id)
+
+        try:
+            snapshot = await asyncio.wait_for(
+                adapter.inventory(connection_id),
+                timeout=INVENTORY_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"Inventory timed out for {connection_id}")
 
         # Persist to state store
         await self.state_store.persist_inventory(connection_id, {
@@ -221,7 +240,17 @@ class AdapterRegistry:
             detail=command,
         )
 
-        result = await adapter.execute(connection_id, command)
+        try:
+            result = await asyncio.wait_for(
+                adapter.execute(connection_id, command),
+                timeout=EXECUTE_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            result = {
+                "command_id": command.get("command_id"),
+                "status": "failed",
+                "error": "Command execution timed out",
+            }
 
         # Audit: after
         status = result.get("status", "unknown")
@@ -244,7 +273,14 @@ class AdapterRegistry:
     async def health(self, connection_id: str) -> HealthStatus:
         """Check health of a connection."""
         adapter = self.get_adapter_for_connection(connection_id)
-        status = await adapter.health(connection_id)
+
+        try:
+            status = await asyncio.wait_for(
+                adapter.health(connection_id),
+                timeout=HEALTH_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            status = HealthStatus(status="error", details={"error": "Health check timed out"})
 
         self.event_bus.publish_nowait({
             "type": "device.health_changed",
@@ -271,19 +307,19 @@ class AdapterRegistry:
         await adapter.teardown(connection_id)
 
         # Update state store
+        async with self._lock:
+            aid = self._connection_to_adapter.pop(connection_id, None)
+            if aid and aid in self._adapters:
+                conns = self._adapters[aid].connections
+                if connection_id in conns:
+                    conns.remove(connection_id)
+
         await self.state_store.save_connection(
             connection_id,
-            self._connection_to_adapter[connection_id],
+            aid or "",
             {},
             status="disconnected",
         )
-
-        # Clean up registry
-        aid = self._connection_to_adapter.pop(connection_id, None)
-        if aid and aid in self._adapters:
-            conns = self._adapters[aid].connections
-            if connection_id in conns:
-                conns.remove(connection_id)
 
         self.event_bus.publish_nowait({
             "type": "connection.state_changed",
@@ -315,6 +351,11 @@ class AdapterRegistry:
             if aid not in self._adapters:
                 logger.warning("Cannot restore connection %s: adapter %s not registered",
                              conn["connection_id"], aid)
+                # Mark as disconnected so it doesn't linger
+                await self.state_store.save_connection(
+                    conn["connection_id"], aid, conn.get("profile", {}),
+                    status="disconnected",
+                )
                 continue
 
             profile_data = conn.get("profile", {})
@@ -328,8 +369,18 @@ class AdapterRegistry:
                     restored += 1
                     # Re-run inventory
                     await self.inventory(result.connection_id)
+                else:
+                    # Mark failed restore as disconnected
+                    await self.state_store.save_connection(
+                        conn["connection_id"], aid, profile_data,
+                        status="disconnected",
+                    )
             except Exception:
                 logger.exception("Failed to restore connection %s", conn["connection_id"])
+                await self.state_store.save_connection(
+                    conn["connection_id"], aid, profile_data,
+                    status="disconnected",
+                )
 
         logger.info("Restored %d/%d connections", restored, len(connections))
         return restored
