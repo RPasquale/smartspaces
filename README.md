@@ -242,6 +242,64 @@ All endpoints require API key authentication (Bearer token or `X-API-Key` header
 | POST   | `/api/agent/confirmations/{id}/deny`            | Deny a confirmation             |
 | GET    | `/api/agent/safety/stats`                       | Safety guard statistics         |
 
+### Advanced Agent Endpoints
+
+| Method | Path                                           | Description                     |
+|--------|-------------------------------------------------|---------------------------------|
+| GET    | `/api/agent/events`                             | SSE event stream (real-time)    |
+| GET    | `/api/agent/events/stats`                       | Event stream statistics         |
+| POST   | `/api/agent/intent`                             | Natural language intent resolver|
+| GET    | `/api/agent/groups`                             | List device groups              |
+| POST   | `/api/agent/groups`                             | Create a device group           |
+| POST   | `/api/agent/groups/set`                         | Control all devices in a group  |
+| GET    | `/api/agent/history`                            | Query action history            |
+| GET    | `/api/agent/schedules`                          | List scheduled actions          |
+| POST   | `/api/agent/schedules`                          | Schedule an action              |
+| POST   | `/api/agent/schedules/{id}/cancel`              | Cancel a scheduled action       |
+| GET    | `/api/agent/analytics`                          | Energy & comfort analytics      |
+| GET    | `/api/agent/analytics/context`                  | Analytics context for LLM       |
+| POST   | `/api/agent/locks/acquire`                      | Acquire device lock (multi-agent)|
+| POST   | `/api/agent/locks/release`                      | Release device lock             |
+| GET    | `/api/agent/locks`                              | List active leases              |
+| GET    | `/api/agent/suggestions`                        | Get proactive action suggestions|
+| GET    | `/api/agent/describe/{device}`                  | Describe device capabilities    |
+| GET    | `/api/agent/describe`                           | Describe all devices            |
+
+## Advanced Agent Features
+
+### Real-time Event Streaming (SSE)
+Server-Sent Events endpoint at `/api/agent/events` with per-client filtering by space, device, and event type. Includes heartbeat keepalive and backpressure handling.
+
+### Natural Language Intent Resolution
+Rule-based NLU pipeline that converts natural language commands into tool calls without requiring an external LLM. Uses the space registry as an entity gazetteer. Supports control, query, scene, group, schedule, environment, and meta intents.
+
+```python
+# "turn on the living room light" → {"tool": "set_device", "args": {"device": "living_room.ceiling_light", "action": "on"}}
+# "make it cooler in here" → resolves to fan/AC devices in context
+# "dim the lamp to 50% in 10 minutes" → schedule + control
+```
+
+### Device Groups
+Static groups (explicit member lists) and dynamic groups (match by capability or space). Auto-generates groups like `all_binary_switch` and `all_living_room`. Control all devices in a group with a single command.
+
+### Action History & Audit Trail
+Thread-safe ring buffer with per-device indexing. Query by device, space, action type, status, initiator, or time range. Generates context prompts for LLM injection.
+
+### Multi-Agent Coordination
+Lease-based exclusive write access with configurable expiry (5-300s). Priority-based preemption for higher-priority agents. Prevents conflicting commands from multiple AI agents.
+
+### Scheduled Actions
+One-shot delays, absolute time scheduling, and recurring intervals via asyncio. Cancel individual or all schedules programmatically.
+
+### Energy & Comfort Analytics
+Power estimation from device capabilities with customizable overrides. Temperature-based comfort scoring (0-1 scale). Generates context text and recommendations for LLM injection.
+
+### Proactive Suggestions
+Time-of-day aware suggestions across comfort, energy, safety, routine, and automation categories. Dismissable with priority ordering. Suggests scenes, energy savings, and comfort adjustments.
+
+### Capability Discovery
+Per-device natural language descriptions that tell AI agents exactly what each device can do, its current state, and its constraints. Generates system prompt context for LLM injection.
+
 ## Project Structure
 
 ```
@@ -250,9 +308,18 @@ smartspaces/
 │   ├── spaces.py             # Semantic device registry (YAML → names)
 │   ├── safety.py             # AI safety guard (access, rate limits)
 │   ├── scenes.py             # Scenes & automation rules engine
-│   ├── tools.py              # LLM tool definitions & executor
+│   ├── tools.py              # LLM tool definitions & executor (25 tools)
 │   ├── mcp_server.py         # MCP server (stdio JSON-RPC)
-│   └── client.py             # Python SDK (sync + async)
+│   ├── client.py             # Python SDK (sync + async)
+│   ├── events.py             # Real-time SSE event streaming
+│   ├── intent.py             # Natural language intent resolver
+│   ├── groups.py             # Device groups (static + dynamic)
+│   ├── history.py            # Action history & audit trail
+│   ├── coordination.py       # Multi-agent lease-based locking
+│   ├── agent_scheduler.py    # Scheduled & recurring actions
+│   ├── analytics.py          # Energy & comfort analytics
+│   ├── suggestions.py        # Proactive action suggestions
+│   └── discovery.py          # Capability discovery prompts
 ├── core/                     # Runtime engine
 │   ├── engine.py             # Main entry point, wires everything
 │   ├── api.py                # FastAPI REST API (40+ endpoints)
@@ -287,8 +354,8 @@ smartspaces/
 │   ├── spaces_example.yaml
 │   ├── scenes_example.yaml
 │   └── modbus_example_register_map.yaml
-├── tests/                    # Test suite (156 tests)
-│   ├── agent/                # Agent Gateway tests (49)
+├── tests/                    # Test suite (231 tests)
+│   ├── agent/                # Agent Gateway tests (124)
 │   └── core/                 # Core runtime tests (23+)
 ├── CLAUDE.md                 # LLM context for the KinCony hardware
 ├── SPEC.md                   # Hardware specification

@@ -23,6 +23,15 @@ from agent.safety import AISafetyGuard, SafetyConfig
 from agent.scenes import SceneEngine
 from agent.spaces import SpaceRegistry
 from agent.tools import ToolExecutor, ToolGenerator
+from agent.events import EventStreamManager, parse_sse_filters
+from agent.groups import GroupRegistry
+from agent.history import ActionHistory
+from agent.intent import IntentResolver
+from agent.coordination import DeviceCoordinator
+from agent.agent_scheduler import ActionScheduler
+from agent.analytics import EnergyComfortAnalyzer
+from agent.suggestions import ActionSuggester
+from agent.discovery import CapabilityDescriber
 
 logger = logging.getLogger(__name__)
 
@@ -435,6 +444,27 @@ def create_api(
     )
     _tool_generator = ToolGenerator(_space_registry)
 
+    # Advanced components
+    _event_manager = EventStreamManager()
+    _group_registry = GroupRegistry(_space_registry)
+    _action_history = ActionHistory()
+    _coordinator = DeviceCoordinator()
+    _analytics = EnergyComfortAnalyzer(_space_registry)
+    _agent_scheduler = ActionScheduler(execute_callback=_tool_executor.call)
+    _intent_resolver = IntentResolver(_space_registry, _group_registry, _scene_engine)
+    _suggester = ActionSuggester(_space_registry, _scene_engine, _action_history, _analytics)
+    _describer = CapabilityDescriber(_space_registry, _analytics)
+
+    # Wire into tool executor
+    _tool_executor.groups = _group_registry
+    _tool_executor.history = _action_history
+    _tool_executor.scheduler = _agent_scheduler
+    _tool_executor.analytics = _analytics
+    _tool_executor.coordinator = _coordinator
+    _tool_executor.intent_resolver = _intent_resolver
+    _tool_executor.suggester = _suggester
+    _tool_executor.describer = _describer
+
     @app.get("/api/agent/spaces")
     async def agent_list_spaces(_key: str = Depends(verify_api_key)):
         """List all spaces and their devices."""
@@ -565,5 +595,174 @@ def create_api(
     async def agent_safety_stats(_key: str = Depends(verify_api_key)):
         """Get AI safety guard statistics."""
         return {"stats": _safety_guard.stats}
+
+    # -- SSE Event Streaming --
+
+    @app.get("/api/agent/events")
+    async def agent_events(
+        request: Any,
+        spaces: str | None = None,
+        devices: str | None = None,
+        types: str | None = None,
+        _key: str = Depends(verify_api_key),
+    ):
+        """Server-Sent Events stream of device state changes, actions, and alerts."""
+        from starlette.responses import StreamingResponse
+
+        filters = parse_sse_filters(spaces, devices, types)
+        client_id, _ = await _event_manager.connect(filters=filters)
+        return StreamingResponse(
+            _event_manager.event_generator(client_id),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.get("/api/agent/events/stats")
+    async def agent_events_stats(_key: str = Depends(verify_api_key)):
+        """Get event stream statistics."""
+        return {"stats": _event_manager.stats}
+
+    # -- Natural Language Intent --
+
+    @app.post("/api/agent/intent")
+    async def agent_resolve_intent(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+        """Resolve natural language to device actions."""
+        result = await _tool_executor.call("resolve_intent", req)
+        return result
+
+    # -- Device Groups --
+
+    @app.get("/api/agent/groups")
+    async def agent_list_groups(_key: str = Depends(verify_api_key)):
+        """List all device groups."""
+        return {"groups": _group_registry.list_groups()}
+
+    @app.post("/api/agent/groups")
+    async def agent_create_group(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+        """Create a new device group."""
+        try:
+            group = _group_registry.add_group(
+                name=req["name"],
+                display_name=req.get("display_name", req["name"]),
+                members=req.get("members"),
+                match_capabilities=req.get("match_capabilities"),
+                match_spaces=req.get("match_spaces"),
+                tags=req.get("tags"),
+            )
+            return {"status": "created", "group": group.name}
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=_safe_error(e))
+
+    @app.post("/api/agent/groups/set")
+    async def agent_set_group(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+        """Apply an action to all devices in a group."""
+        result = await _tool_executor.call("set_group", req)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+
+    # -- Action History --
+
+    @app.get("/api/agent/history")
+    async def agent_get_history(
+        device: str | None = None,
+        space: str | None = None,
+        minutes: int = 30,
+        limit: int = 50,
+        _key: str = Depends(verify_api_key),
+    ):
+        """Get recent action history."""
+        return {
+            "history": _action_history.query(
+                device=device, space=space,
+                since=__import__("time").time() - (minutes * 60),
+                limit=limit,
+            ),
+            "stats": _action_history.stats,
+        }
+
+    # -- Scheduled Actions --
+
+    @app.get("/api/agent/schedules")
+    async def agent_list_schedules(
+        active_only: bool = False,
+        _key: str = Depends(verify_api_key),
+    ):
+        """List scheduled actions."""
+        return {"schedules": _agent_scheduler.list_schedules(active_only=active_only)}
+
+    @app.post("/api/agent/schedules")
+    async def agent_schedule_action(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+        """Schedule a device action or scene activation."""
+        result = await _tool_executor.call("schedule_action", req)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+
+    @app.post("/api/agent/schedules/{schedule_id}/cancel")
+    async def agent_cancel_schedule(schedule_id: str, _key: str = Depends(verify_api_key)):
+        """Cancel a scheduled action."""
+        cancelled = await _agent_scheduler.cancel(schedule_id)
+        return {"cancelled": cancelled, "schedule_id": schedule_id}
+
+    # -- Analytics --
+
+    @app.get("/api/agent/analytics")
+    async def agent_analytics(_key: str = Depends(verify_api_key)):
+        """Get energy and comfort analytics."""
+        return _analytics.compute().to_dict()
+
+    @app.get("/api/agent/analytics/context")
+    async def agent_analytics_context(_key: str = Depends(verify_api_key)):
+        """Get analytics as LLM context text."""
+        return {"context": _analytics.to_context_prompt()}
+
+    # -- Multi-agent Coordination --
+
+    @app.post("/api/agent/locks/acquire")
+    async def agent_acquire_lock(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+        """Acquire exclusive write access to a device."""
+        result = await _tool_executor.call("acquire_lock", req)
+        return result
+
+    @app.post("/api/agent/locks/release")
+    async def agent_release_lock(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+        """Release exclusive device access."""
+        result = await _tool_executor.call("release_lock", req)
+        return result
+
+    @app.get("/api/agent/locks")
+    async def agent_list_locks(agent_id: str | None = None, _key: str = Depends(verify_api_key)):
+        """List active device leases."""
+        return {"locks": _coordinator.list_leases(agent_id=agent_id)}
+
+    # -- Suggestions --
+
+    @app.get("/api/agent/suggestions")
+    async def agent_get_suggestions(
+        max_suggestions: int = 5,
+        _key: str = Depends(verify_api_key),
+    ):
+        """Get proactive action suggestions."""
+        return {"suggestions": _suggester.suggest(max_suggestions=max_suggestions)}
+
+    # -- Device Discovery --
+
+    @app.get("/api/agent/describe/{device}")
+    async def agent_describe_device(device: str, _key: str = Depends(verify_api_key)):
+        """Get a natural language description of a device's capabilities."""
+        result = _describer.describe(device)
+        if "error" in result:
+            raise HTTPException(status_code=404, detail=result["error"])
+        return result
+
+    @app.get("/api/agent/describe")
+    async def agent_describe_all(space: str | None = None, _key: str = Depends(verify_api_key)):
+        """Get descriptions of all devices."""
+        return {"devices": _describer.describe_all(space=space)}
 
     return app

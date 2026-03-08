@@ -353,10 +353,10 @@ pip install -e ".[server,dev]"
 
 ## Tests
 
-156 tests across all components. Run with:
+231 tests across all components. Run with:
 ```bash
 pytest tests/ -v                                    # all tests
-pytest tests/agent/ -v                              # agent gateway (49 tests)
+pytest tests/agent/ -v                              # agent gateway (124 tests)
 pytest tests/core/ -v                               # core runtime
 pytest tests/ --cov=agent --cov=core --cov=sdk      # with coverage
 ```

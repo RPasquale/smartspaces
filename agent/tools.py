@@ -12,12 +12,25 @@ guard and adapter registry.
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from typing import Any
 
 from agent.safety import AISafetyGuard
 from agent.scenes import SceneEngine
 from agent.spaces import SpaceRegistry
+
+# Type-only import guard for optional components
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from agent.groups import GroupRegistry
+    from agent.history import ActionHistory
+    from agent.agent_scheduler import ActionScheduler
+    from agent.analytics import EnergyComfortAnalyzer
+    from agent.coordination import DeviceCoordinator
+    from agent.intent import IntentResolver
+    from agent.suggestions import ActionSuggester
+    from agent.discovery import CapabilityDescriber
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +169,176 @@ TOOL_DEFINITIONS = [
             "required": ["space"],
         },
     },
+    {
+        "name": "resolve_intent",
+        "description": "Resolve a natural language request into device actions. Handles fuzzy commands like 'make it cooler' or 'dim the lights a bit'.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "Natural language request (e.g. 'turn off all the lights', 'make it cooler in here').",
+                },
+                "execute": {
+                    "type": "boolean",
+                    "description": "If true, execute the resolved actions immediately. If false, just return the plan. Default false.",
+                },
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "list_groups",
+        "description": "List all device groups (e.g. 'all lights', 'upstairs', 'energy consumers').",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "set_group",
+        "description": "Apply an action to all devices in a group. Example: turn off all lights.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "group": {
+                    "type": "string",
+                    "description": "Group name (e.g. 'all_lights', 'all_living_room').",
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["on", "off", "toggle", "set"],
+                    "description": "Action to apply to all devices in the group.",
+                },
+                "value": {
+                    "description": "Optional value (brightness, temperature, etc.).",
+                },
+            },
+            "required": ["group", "action"],
+        },
+    },
+    {
+        "name": "get_history",
+        "description": "Get recent action history. Shows what happened recently — useful for context and avoiding redundant actions.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "device": {
+                    "type": "string",
+                    "description": "Filter by device name. Optional.",
+                },
+                "space": {
+                    "type": "string",
+                    "description": "Filter by space. Optional.",
+                },
+                "minutes": {
+                    "type": "integer",
+                    "description": "Look back this many minutes. Default 30.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results. Default 20.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "schedule_action",
+        "description": "Schedule a device action or scene for a future time. Supports delays ('in 30 minutes') and absolute times.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "device": {"type": "string", "description": "Device to control. Optional if scene is set."},
+                "action": {"type": "string", "description": "Action to perform (on/off/set/toggle)."},
+                "value": {"description": "Optional value."},
+                "scene": {"type": "string", "description": "Scene to activate instead of device action. Optional."},
+                "delay_seconds": {"type": "number", "description": "Run after this many seconds."},
+                "execute_at": {"type": "number", "description": "Unix timestamp to run at."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "list_schedules",
+        "description": "List all scheduled actions (pending, completed, cancelled).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "active_only": {"type": "boolean", "description": "Only show pending/running schedules. Default false."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "cancel_schedule",
+        "description": "Cancel a scheduled action.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "schedule_id": {"type": "string", "description": "The schedule ID to cancel."},
+            },
+            "required": ["schedule_id"],
+        },
+    },
+    {
+        "name": "get_analytics",
+        "description": "Get energy consumption and comfort analytics — power usage, temperatures, comfort score.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "acquire_lock",
+        "description": "Acquire exclusive write access to a device (for multi-agent coordination). Prevents other agents from controlling the device.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "device": {"type": "string", "description": "Device to lock."},
+                "agent_id": {"type": "string", "description": "Your agent identifier."},
+                "duration": {"type": "number", "description": "Lease duration in seconds (5-300). Default 30."},
+                "reason": {"type": "string", "description": "Why you need exclusive access."},
+            },
+            "required": ["device", "agent_id"],
+        },
+    },
+    {
+        "name": "release_lock",
+        "description": "Release exclusive access to a device.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "device": {"type": "string", "description": "Device to unlock."},
+                "agent_id": {"type": "string", "description": "Your agent identifier."},
+            },
+            "required": ["device", "agent_id"],
+        },
+    },
+    {
+        "name": "get_suggestions",
+        "description": "Get proactive suggestions based on current state, time of day, and context. Helps agents be proactive.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "max_suggestions": {"type": "integer", "description": "Maximum suggestions to return. Default 5."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "describe_device",
+        "description": "Get a detailed natural language description of a device — what it can do, its current state, and constraints.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "device": {"type": "string", "description": "Device name to describe."},
+            },
+            "required": ["device"],
+        },
+    },
 ]
 
 
@@ -225,6 +408,16 @@ class ToolExecutor:
         self.scenes = scene_engine
         self._read_fn = read_fn
         self._execute_fn = execute_fn
+
+        # Optional advanced components (set after construction)
+        self.groups: Any = None          # GroupRegistry
+        self.history: Any = None         # ActionHistory
+        self.scheduler: Any = None       # ActionScheduler
+        self.analytics: Any = None       # EnergyComfortAnalyzer
+        self.coordinator: Any = None     # DeviceCoordinator
+        self.intent_resolver: Any = None # IntentResolver
+        self.suggester: Any = None       # ActionSuggester
+        self.describer: Any = None       # CapabilityDescriber
 
     def set_adapter_fns(self, read_fn: Any, execute_fn: Any) -> None:
         """Wire up the adapter registry functions."""
@@ -413,3 +606,152 @@ class ToolExecutor:
             summary.append(entry)
 
         return {"space": space_name, "devices": summary}
+
+    async def _tool_resolve_intent(self, args: dict) -> dict:
+        text = args.get("text", "")
+        execute = args.get("execute", False)
+
+        if not self.intent_resolver:
+            return {"error": "Intent resolver not configured"}
+
+        resolved = self.intent_resolver.resolve(text)
+        result = resolved.to_dict()
+
+        if execute and resolved.tool_calls:
+            execution_results = []
+            for tc in resolved.tool_calls:
+                tool_name = tc.get("tool", "")
+                tool_args = tc.get("args", {})
+                res = await self.call(tool_name, tool_args)
+                execution_results.append({"tool": tool_name, "result": res})
+            result["execution_results"] = execution_results
+
+        return result
+
+    async def _tool_list_groups(self, args: dict) -> dict:
+        if not self.groups:
+            return {"error": "Groups not configured"}
+        return {"groups": self.groups.list_groups()}
+
+    async def _tool_set_group(self, args: dict) -> dict:
+        if not self.groups:
+            return {"error": "Groups not configured"}
+
+        group_name = args.get("group", "")
+        action = args.get("action", "off")
+        value = args.get("value")
+
+        members = self.groups.get_writable_members(group_name)
+        if not members:
+            return {"error": f"Unknown group or no writable devices: {group_name}"}
+
+        results = []
+        for member in members:
+            call_args: dict[str, Any] = {"device": member.semantic_name, "action": action}
+            if value is not None:
+                call_args["value"] = value
+            result = await self._tool_set_device(call_args)
+            results.append(result)
+
+        succeeded = sum(1 for r in results if r.get("status") == "succeeded")
+        return {
+            "group": group_name,
+            "action": action,
+            "total_devices": len(members),
+            "succeeded": succeeded,
+            "failed": len(members) - succeeded,
+            "results": results,
+        }
+
+    async def _tool_get_history(self, args: dict) -> dict:
+        if not self.history:
+            return {"error": "History not configured"}
+
+        minutes = args.get("minutes", 30)
+        return {
+            "history": self.history.query(
+                device=args.get("device"),
+                space=args.get("space"),
+                since=time.time() - (minutes * 60),
+                limit=args.get("limit", 20),
+            ),
+        }
+
+    async def _tool_schedule_action(self, args: dict) -> dict:
+        if not self.scheduler:
+            return {"error": "Scheduler not configured"}
+
+        delay = args.get("delay_seconds")
+        execute_at = args.get("execute_at")
+
+        kwargs: dict[str, Any] = {
+            "device": args.get("device"),
+            "action": args.get("action"),
+            "value": args.get("value"),
+            "scene": args.get("scene"),
+            "description": args.get("description", ""),
+        }
+
+        if delay:
+            sched = await self.scheduler.schedule_delay(delay, **kwargs)
+        elif execute_at:
+            sched = await self.scheduler.schedule_at(execute_at, **kwargs)
+        else:
+            return {"error": "Either delay_seconds or execute_at is required"}
+
+        return sched.to_dict()
+
+    async def _tool_list_schedules(self, args: dict) -> dict:
+        if not self.scheduler:
+            return {"error": "Scheduler not configured"}
+        active_only = args.get("active_only", False)
+        return {"schedules": self.scheduler.list_schedules(active_only=active_only)}
+
+    async def _tool_cancel_schedule(self, args: dict) -> dict:
+        if not self.scheduler:
+            return {"error": "Scheduler not configured"}
+        schedule_id = args.get("schedule_id", "")
+        cancelled = await self.scheduler.cancel(schedule_id)
+        return {"cancelled": cancelled, "schedule_id": schedule_id}
+
+    async def _tool_get_analytics(self, args: dict) -> dict:
+        if not self.analytics:
+            return {"error": "Analytics not configured"}
+        return self.analytics.compute().to_dict()
+
+    async def _tool_acquire_lock(self, args: dict) -> dict:
+        if not self.coordinator:
+            return {"error": "Coordinator not configured"}
+        device = args.get("device", "")
+        agent_id = args.get("agent_id", "")
+        duration = args.get("duration", 30.0)
+        reason = args.get("reason", "")
+
+        lease = await self.coordinator.acquire(device, agent_id, duration, reason=reason)
+        if not lease:
+            existing = self.coordinator.get_lease(device)
+            return {
+                "acquired": False,
+                "reason": f"Device leased by agent '{existing.agent_id}'" if existing else "Failed",
+            }
+        return {"acquired": True, "lease": lease.to_dict()}
+
+    async def _tool_release_lock(self, args: dict) -> dict:
+        if not self.coordinator:
+            return {"error": "Coordinator not configured"}
+        device = args.get("device", "")
+        agent_id = args.get("agent_id", "")
+        released = await self.coordinator.release_device(device, agent_id)
+        return {"released": released}
+
+    async def _tool_get_suggestions(self, args: dict) -> dict:
+        if not self.suggester:
+            return {"error": "Suggester not configured"}
+        max_s = args.get("max_suggestions", 5)
+        return {"suggestions": self.suggester.suggest(max_suggestions=max_s)}
+
+    async def _tool_describe_device(self, args: dict) -> dict:
+        if not self.describer:
+            return {"error": "Describer not configured"}
+        device = args.get("device", "")
+        return self.describer.describe(device)
