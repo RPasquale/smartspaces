@@ -109,6 +109,69 @@ if HAS_FASTAPI:
         connection_id: str
         point_id: str
 
+    # -- Agent Gateway request models --
+
+    class AgentStateRequest(BaseModel):
+        device: str
+
+    class AgentSetRequest(BaseModel):
+        device: str
+        action: str
+        value: Any = None
+
+    class AgentSpaceSummaryRequest(BaseModel):
+        space: str
+
+    class AgentSceneRequest(BaseModel):
+        scene: str
+
+    class AgentCreateSceneRequest(BaseModel):
+        name: str
+        display_name: str | None = None
+        actions: list[dict[str, Any]]
+
+    class AgentCreateRuleRequest(BaseModel):
+        name: str
+        display_name: str | None = None
+        condition: dict[str, Any]
+        actions: list[dict[str, Any]]
+        cooldown_sec: float = 60.0
+
+    class AgentIntentRequest(BaseModel):
+        text: str
+
+    class AgentCreateGroupRequest(BaseModel):
+        name: str
+        display_name: str | None = None
+        members: list[str] | None = None
+        match_capabilities: list[str] | None = None
+        match_spaces: list[str] | None = None
+        tags: list[str] | None = None
+
+    class AgentSetGroupRequest(BaseModel):
+        group: str
+        action: str
+        value: Any = None
+
+    class AgentScheduleRequest(BaseModel):
+        device: str | None = None
+        action: str | None = None
+        value: Any = None
+        scene: str | None = None
+        delay_seconds: float | None = None
+        at_time: str | None = None
+        recurring_seconds: float | None = None
+
+    class AgentLockRequest(BaseModel):
+        device: str
+        agent_id: str
+        duration: float = 30.0
+        priority: int = 5
+
+    class AgentReleaseRequest(BaseModel):
+        device: str
+        agent_id: str
+
 
 def create_api(
     registry: AdapterRegistry,
@@ -529,25 +592,25 @@ def create_api(
         return {"devices": _space_registry.list_devices(space=space, capability=capability)}
 
     @app.post("/api/agent/state")
-    async def agent_get_state(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+    async def agent_get_state(req: AgentStateRequest, _key: str = Depends(verify_api_key)):
         """Read the current state of a device by semantic name."""
-        result = await _tool_executor.call("get_device_state", req)
+        result = await _tool_executor.call("get_device_state", req.model_dump())
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
 
     @app.post("/api/agent/set")
-    async def agent_set_device(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+    async def agent_set_device(req: AgentSetRequest, _key: str = Depends(verify_api_key)):
         """Control a device by semantic name."""
-        result = await _tool_executor.call("set_device", req)
+        result = await _tool_executor.call("set_device", req.model_dump(exclude_none=True))
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
 
     @app.post("/api/agent/space_summary")
-    async def agent_space_summary(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+    async def agent_space_summary(req: AgentSpaceSummaryRequest, _key: str = Depends(verify_api_key)):
         """Get states of all devices in a space."""
-        result = await _tool_executor.call("get_space_summary", req)
+        result = await _tool_executor.call("get_space_summary", req.model_dump())
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
@@ -558,17 +621,17 @@ def create_api(
         return {"scenes": _scene_engine.list_scenes()}
 
     @app.post("/api/agent/scenes")
-    async def agent_create_scene(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+    async def agent_create_scene(req: AgentCreateSceneRequest, _key: str = Depends(verify_api_key)):
         """Create a new scene."""
-        result = await _tool_executor.call("create_scene", req)
+        result = await _tool_executor.call("create_scene", req.model_dump(exclude_none=True))
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
 
     @app.post("/api/agent/scenes/activate")
-    async def agent_activate_scene(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+    async def agent_activate_scene(req: AgentSceneRequest, _key: str = Depends(verify_api_key)):
         """Activate a named scene."""
-        result = await _tool_executor.call("activate_scene", req)
+        result = await _tool_executor.call("activate_scene", req.model_dump())
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
@@ -579,15 +642,15 @@ def create_api(
         return {"rules": _scene_engine.list_rules()}
 
     @app.post("/api/agent/rules")
-    async def agent_create_rule(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+    async def agent_create_rule(req: AgentCreateRuleRequest, _key: str = Depends(verify_api_key)):
         """Create an automation rule."""
         try:
             rule = _scene_engine.add_rule(
-                name=req["name"],
-                display_name=req.get("display_name", req["name"]),
-                condition=req["condition"],
-                actions=req["actions"],
-                cooldown_sec=req.get("cooldown_sec", 60.0),
+                name=req.name,
+                display_name=req.display_name or req.name,
+                condition=req.condition,
+                actions=req.actions,
+                cooldown_sec=req.cooldown_sec,
             )
             return {"status": "created", "rule": rule.name}
         except Exception as e:
@@ -678,9 +741,9 @@ def create_api(
     # -- Natural Language Intent --
 
     @app.post("/api/agent/intent")
-    async def agent_resolve_intent(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+    async def agent_resolve_intent(req: AgentIntentRequest, _key: str = Depends(verify_api_key)):
         """Resolve natural language to device actions."""
-        result = await _tool_executor.call("resolve_intent", req)
+        result = await _tool_executor.call("resolve_intent", req.model_dump())
         return result
 
     # -- Device Groups --
@@ -691,25 +754,25 @@ def create_api(
         return {"groups": _group_registry.list_groups()}
 
     @app.post("/api/agent/groups")
-    async def agent_create_group(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+    async def agent_create_group(req: AgentCreateGroupRequest, _key: str = Depends(verify_api_key)):
         """Create a new device group."""
         try:
             group = _group_registry.add_group(
-                name=req["name"],
-                display_name=req.get("display_name", req["name"]),
-                members=req.get("members"),
-                match_capabilities=req.get("match_capabilities"),
-                match_spaces=req.get("match_spaces"),
-                tags=req.get("tags"),
+                name=req.name,
+                display_name=req.display_name or req.name,
+                members=req.members,
+                match_capabilities=req.match_capabilities,
+                match_spaces=req.match_spaces,
+                tags=req.tags,
             )
             return {"status": "created", "group": group.name}
         except Exception as e:
             raise HTTPException(status_code=400, detail=_safe_error(e))
 
     @app.post("/api/agent/groups/set")
-    async def agent_set_group(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+    async def agent_set_group(req: AgentSetGroupRequest, _key: str = Depends(verify_api_key)):
         """Apply an action to all devices in a group."""
-        result = await _tool_executor.call("set_group", req)
+        result = await _tool_executor.call("set_group", req.model_dump(exclude_none=True))
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
@@ -745,9 +808,9 @@ def create_api(
         return {"schedules": _agent_scheduler.list_schedules(active_only=active_only)}
 
     @app.post("/api/agent/schedules")
-    async def agent_schedule_action(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+    async def agent_schedule_action(req: AgentScheduleRequest, _key: str = Depends(verify_api_key)):
         """Schedule a device action or scene activation."""
-        result = await _tool_executor.call("schedule_action", req)
+        result = await _tool_executor.call("schedule_action", req.model_dump(exclude_none=True))
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
@@ -773,15 +836,15 @@ def create_api(
     # -- Multi-agent Coordination --
 
     @app.post("/api/agent/locks/acquire")
-    async def agent_acquire_lock(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+    async def agent_acquire_lock(req: AgentLockRequest, _key: str = Depends(verify_api_key)):
         """Acquire exclusive write access to a device."""
-        result = await _tool_executor.call("acquire_lock", req)
+        result = await _tool_executor.call("acquire_lock", req.model_dump())
         return result
 
     @app.post("/api/agent/locks/release")
-    async def agent_release_lock(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+    async def agent_release_lock(req: AgentReleaseRequest, _key: str = Depends(verify_api_key)):
         """Release exclusive device access."""
-        result = await _tool_executor.call("release_lock", req)
+        result = await _tool_executor.call("release_lock", req.model_dump())
         return result
 
     @app.get("/api/agent/locks")

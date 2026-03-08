@@ -464,6 +464,44 @@ class StateStore:
             )
             await self.db.commit()
 
+    async def prune_audit_log(
+        self, max_age_days: int = 30, max_rows: int = 1_000_000,
+    ) -> int:
+        """Delete audit log entries older than max_age_days or exceeding max_rows.
+
+        Returns the number of rows deleted.
+        """
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+        total_deleted = 0
+
+        async with self._write_lock:
+            # Delete by age
+            cursor = await self.db.execute(
+                "DELETE FROM audit_log WHERE timestamp < ?", (cutoff,)
+            )
+            total_deleted += cursor.rowcount
+
+            # Delete by count (keep most recent max_rows)
+            cursor = await self.db.execute("SELECT COUNT(*) as cnt FROM audit_log")
+            row = await cursor.fetchone()
+            count = row["cnt"] if row else 0
+
+            if count > max_rows:
+                excess = count - max_rows
+                cursor = await self.db.execute(
+                    "DELETE FROM audit_log WHERE id IN "
+                    "(SELECT id FROM audit_log ORDER BY timestamp ASC LIMIT ?)",
+                    (excess,),
+                )
+                total_deleted += cursor.rowcount
+
+            if total_deleted > 0:
+                await self.db.commit()
+                logger.info("Pruned %d audit log entries", total_deleted)
+
+        return total_deleted
+
     async def get_audit_log(self, limit: int = 100, device_id: str | None = None) -> list[dict[str, Any]]:
         if device_id:
             cursor = await self.db.execute(
