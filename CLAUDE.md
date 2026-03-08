@@ -28,7 +28,8 @@ This is NOT using Home Assistant. This is a from-scratch custom system.
 pip install -e ".[server,dev]"
 python -m core.engine                           # start server on :8000
 python -m agent.mcp_server --spaces spaces.yaml # MCP server for Claude
-pytest tests/ -v                                # 156 tests
+pytest tests/ -v                                # 413 tests
+docker-compose up                               # Docker deployment
 ```
 
 ## KC868-A4 Hardware
@@ -261,11 +262,15 @@ Enable/disable: `Rule1 1` (enable) / `Rule1 0` (disable).
 - `client.py` — `SmartSpacesClient` (sync) + `AsyncSmartSpacesClient` wrapping `/api/agent/*`
 
 ### Core Runtime (`core/`)
-- `engine.py` — boots EventBus → StateStore → Registry → Scheduler → API
-- `api.py` — FastAPI with API key auth, 40+ endpoints (15 agent gateway + 25 core)
+- `engine.py` — boots EventBus → StateStore → Registry → Scheduler → API; full CLI with argparse
+- `api.py` — FastAPI with API key auth, CORS, correlation IDs, metrics middleware, 40+ endpoints
+- `event_bus.py` — in-process async pub/sub event bus
+- `event_bus_redis.py` — Redis-backed distributed event bus (drop-in replacement)
 - `registry.py` — adapter lifecycle with `asyncio.Lock`, configurable timeouts
-- `state_store.py` — SQLite with WAL mode, write lock, schema migrations
+- `state_store.py` — SQLite with WAL mode, write lock, schema migrations, audit log retention
 - `scheduler.py` — poll scheduling with 15s timeouts and auto-recovery
+- `logging_config.py` — structured logging (JSON/text formatters, correlation IDs via contextvars)
+- `metrics.py` — Prometheus metrics (with no-op stubs when prometheus-client not installed)
 
 ### Adapter SDK (`sdk/adapter_api/`)
 - `base.py` — abstract `Adapter` ABC: discover/commission/inventory/subscribe/read_point/execute/health/teardown
@@ -344,12 +349,29 @@ Download firmware: `curl -L -o tasmota32.factory.bin https://ota.tasmota.com/tas
 # Full install
 pip install -e ".[server,dev]"
 
-# Core: pydantic, pyyaml, httpx, aiosqlite
+# Core: pydantic, pyyaml, httpx, aiosqlite, python-dotenv
 # Server: fastapi, uvicorn
+# Metrics: prometheus-client (optional)
+# Redis bus: redis[hiredis] (optional)
+# Protocol-specific: pymodbus, paho-mqtt, xknx, BAC0, asyncua, pydnp3, onvif-zeep (optional)
 # Dev: pytest, pytest-asyncio, pytest-cov, ruff
 # Original scripts: requests, pyserial
 # Flashing: esptool
 ```
+
+## Deployment
+
+```bash
+# Docker
+docker-compose up
+
+# CLI with all options
+python -m core.engine --host 0.0.0.0 --port 8000 --db-path state.db \
+  --spaces spaces.yaml --scenes scenes.yaml --log-format json --log-level INFO \
+  --event-bus memory --cors-origins "http://localhost:3000"
+```
+
+Environment variables: `SMARTSPACES_API_KEYS`, `SMARTSPACES_CORS_ORIGINS`, `SMARTSPACES_EVENT_BUS`, `SMARTSPACES_REDIS_URL`, `KINCONY_IP`
 
 ## Tests
 
