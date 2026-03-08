@@ -1,25 +1,70 @@
-# LLM Context — Kincony KC868-A4 Home Automation System
+# LLM Context — SmartSpaces
 
 This file contains everything an LLM needs to understand, modify, and extend this project with zero ambiguity.
 
 ## What This Project Is
 
-A custom home automation system built on the **Kincony KC868-A4** board — an ESP32-based controller with 4 relays, 4 digital inputs, 4 analog inputs, IR, and RF. It runs **Tasmota 15.3.0** firmware and is controlled via HTTP, MQTT, serial, or WebSocket.
+**SmartSpaces** is a universal adapter platform for connecting AI agents to physical devices. It started with the KinCony KC868-A4 board and grew into a multi-protocol system with 15 adapters, a core runtime, and an Agent Gateway that lets any LLM control devices through semantic names with built-in safety guards.
 
 This is NOT using Home Assistant. This is a from-scratch custom system.
 
-## Architecture
+### System Layers
+
+1. **Adapter SDK** (`sdk/adapter_api/`) — Abstract base class, canonical Pydantic models, typed errors, safety classes
+2. **Protocol Adapters** (`adapters/`) — 15 adapters: KinCony, Shelly, MQTT, Modbus, Hue, ONVIF, ESPHome, Zigbee2MQTT, Z-Wave JS, Matter, Lutron, KNX, BACnet, OPC UA, DNP3
+3. **Core Runtime** (`core/`) — EventBus (async pub/sub), StateStore (SQLite WAL), AdapterRegistry (with locks + timeouts), Scheduler (with auto-recovery), FastAPI REST API (API key auth, audit log)
+4. **Agent Gateway** (`agent/`) — SpaceRegistry (YAML-driven semantic names), AISafetyGuard (access levels, rate limits, confirmations), SceneEngine (presets + automation rules), ToolGenerator (OpenAI/Anthropic/MCP formats), ToolExecutor, MCPServer (stdio JSON-RPC), SmartSpacesClient (sync + async SDK)
+
+### Key Design Decisions
+- **Python 3.11** target runtime
+- **Local-first** — control devices over LAN, no cloud dependency
+- **Safety-first AI** — AI access levels (full/read_only/confirm_required/blocked), rate limiting, cooldowns, capability restrictions, S3+ requires human confirmation
+- **YAML-driven config** — `spaces.yaml` maps raw device IDs to semantic names like `living_room.ceiling_light`
+- **Protocol-agnostic** — every adapter presents the same interface to the orchestrator
+
+### Running
+
+```bash
+pip install -e ".[server,dev]"
+python -m core.engine                           # start server on :8000
+python -m agent.mcp_server --spaces spaces.yaml # MCP server for Claude
+pytest tests/ -v                                # 156 tests
+```
+
+## KC868-A4 Hardware
+
+The original hardware this project was built for.
+
+## Full Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        AI Agent / LLM                            │
+│            (Claude, GPT, custom agent, etc.)                     │
+└───────────┬──────────────────┬──────────────────┬────────────────┘
+            │                  │                  │
+      Python SDK         REST API           MCP Server
+   (SmartSpacesClient)  (/api/agent/*)     (stdio JSON-RPC)
+            │                  │                  │
+┌───────────▼──────────────────▼──────────────────▼────────────────┐
+│  Agent Gateway: SpaceRegistry · SafetyGuard · SceneEngine        │
+│                 ToolGenerator · ToolExecutor                      │
+├─────────────────────────────────────────────────────────────────┤
+│  Core Runtime: EventBus · StateStore · Registry · Scheduler      │
+│                FastAPI (40+ endpoints) · API Key Auth             │
+├─────────────────────────────────────────────────────────────────┤
+│  Adapters: KinCony · Shelly · MQTT · Modbus · Hue · ONVIF       │
+│            ESPHome · Zigbee · Z-Wave · Matter · Lutron            │
+│            KNX · BACnet · OPC UA · DNP3                           │
+├─────────────────────────────────────────────────────────────────┤
+│  Physical Devices (each via its native protocol)                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### KC868-A4 Hardware Diagram
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                   Your Application                   │
-│              (Python, Node, anything)                 │
-└──────────┬──────────────┬──────────────┬────────────┘
-           │              │              │
-     HTTP REST       MQTT pub/sub    Serial USB
-     (port 80)       (port 1883)    (115200 baud)
-           │              │              │
-┌──────────▼──────────────▼──────────────▼────────────┐
 │              Tasmota 15.3.0 Firmware                  │
 │              (on ESP32-D0WD-V3)                       │
 ├─────────────────────────────────────────────────────┤
@@ -205,36 +250,30 @@ Enable/disable: `Rule1 1` (enable) / `Rule1 0` (disable).
 
 **Power** — 12V DC required. USB alone powers ESP32 but not the relay coils.
 
-## Existing Code
+## Key Modules
 
-### kincony_control.py
+### Agent Gateway (`agent/`)
+- `spaces.py` — `SpaceRegistry`: YAML-driven semantic device naming (`living_room.ceiling_light`)
+- `safety.py` — `AISafetyGuard`: access levels (full/read_only/confirm_required/blocked), rate limiting, cooldowns, capability restrictions, confirmation workflow
+- `scenes.py` — `SceneEngine`: multi-device presets and condition-action automation rules
+- `tools.py` — `ToolGenerator` (OpenAI/Anthropic/MCP format) + `ToolExecutor` (routes through safety)
+- `mcp_server.py` — MCP server (stdio JSON-RPC) for Claude Desktop/Code
+- `client.py` — `SmartSpacesClient` (sync) + `AsyncSmartSpacesClient` wrapping `/api/agent/*`
 
-The main control script. Uses HTTP API via `requests`.
+### Core Runtime (`core/`)
+- `engine.py` — boots EventBus → StateStore → Registry → Scheduler → API
+- `api.py` — FastAPI with API key auth, 40+ endpoints (15 agent gateway + 25 core)
+- `registry.py` — adapter lifecycle with `asyncio.Lock`, configurable timeouts
+- `state_store.py` — SQLite with WAL mode, write lock, schema migrations
+- `scheduler.py` — poll scheduling with 15s timeouts and auto-recovery
 
-```
-# Usage:
-python kincony_control.py                     # interactive demo (cycles all relays)
-python kincony_control.py "Power1 ON"         # single command
-python kincony_control.py "Status 8"          # read sensors
-python kincony_control.py "Power0"            # all relay states
+### Adapter SDK (`sdk/adapter_api/`)
+- `base.py` — abstract `Adapter` ABC: discover/commission/inventory/subscribe/read_point/execute/health/teardown
+- `models.py` — canonical Pydantic models (Device, Endpoint, Point, SafetyClass S0-S5, etc.)
 
-# Config via environment:
-KINCONY_IP=192.168.0.100 python kincony_control.py
-```
-
-Key functions:
-- `send_command(cmd)` → sends any Tasmota command, returns JSON
-- `relay_on(num)` / `relay_off(num)` / `relay_toggle(num)` → control relay 1-4
-- `relay_status()` → returns `{"POWER1":"OFF","POWER2":"OFF","POWER3":"OFF","POWER4":"OFF"}`
-- `device_info()` → returns dict with device name, IP, MAC, WiFi, uptime, power state
-
-### Probe scripts (for reference/debugging)
-
-- `probe_device.py` — tries serial commands at multiple baud rates
-- `probe_v2.py` — DTR/RTS reset + multiple line endings
-- `deep_probe.py` — loopback test, baud sniffing, bootloader sync, pin state check
-- `at_test.py` — ESP-AT command testing
-- `capture_boot.py` — captures ESP32 boot output after reset
+### Original Scripts
+- `kincony_control.py` — KC868-A4 HTTP control (`KINCONY_IP` env var, default `192.168.0.90`)
+- `probe_device.py`, `probe_v2.py`, `deep_probe.py`, `at_test.py`, `capture_boot.py` — serial debugging
 
 ## Flashing a New KC868-A4
 
@@ -301,15 +340,30 @@ Download firmware: `curl -L -o tasmota32.factory.bin https://ota.tasmota.com/tas
 
 ## Dependencies
 
+```bash
+# Full install
+pip install -e ".[server,dev]"
+
+# Core: pydantic, pyyaml, httpx, aiosqlite
+# Server: fastapi, uvicorn
+# Dev: pytest, pytest-asyncio, pytest-cov, ruff
+# Original scripts: requests, pyserial
+# Flashing: esptool
 ```
-pip install requests    # HTTP control
-pip install pyserial    # serial/USB control
-pip install paho-mqtt   # MQTT control (optional)
-pip install esptool     # firmware flashing (optional)
+
+## Tests
+
+156 tests across all components. Run with:
+```bash
+pytest tests/ -v                                    # all tests
+pytest tests/agent/ -v                              # agent gateway (49 tests)
+pytest tests/core/ -v                               # core runtime
+pytest tests/ --cov=agent --cov=core --cov=sdk      # with coverage
 ```
 
 ## Important Constraints
 
+### Hardware (KC868-A4)
 - The device MUST have 12V DC power for relays to physically switch. USB alone powers the ESP32 but not the relay coils.
 - WiFi is 2.4GHz only. 5GHz is not supported by the ESP32.
 - The Tasmota web UI has NO authentication by default. Set `WebPassword` immediately after setup.
@@ -317,3 +371,10 @@ pip install esptool     # firmware flashing (optional)
 - The analog inputs read 0-3.3V. Higher voltages WILL damage the ESP32.
 - Maximum 10A per relay channel. Exceeding this will damage the relay contacts.
 - The device hostname format is `tasmota-XXXXXX-XXXX` where XXXXXX is derived from the MAC address.
+
+### Software
+- Python 3.11+ required
+- SQLite state store uses WAL mode — single writer, multiple readers
+- API key auth required on all REST endpoints (Bearer or X-API-Key header)
+- AI safety guard blocks lock/door_lock capabilities by default
+- S3+ safety class devices always require human confirmation for AI writes

@@ -1,7 +1,7 @@
 
 # Universal Physical Space Adapter Interface Spec Pack
-Version: 1.0  
-Status: Draft / Normative proposal  
+Version: 1.1
+Status: Implemented (interface complete, adapters stub-level)
 Audience: adapter authors, protocol-driver authors, orchestrator developers, QA, security reviewers
 
 ## 1. Purpose
@@ -2594,33 +2594,25 @@ It MUST NOT assume:
 
 ---
 
-## 55. Recommended first implementation details for your codebase
+## 55. Implementation status
 
-Because you already have a KinCony-focused repository, the fastest practical architecture is:
+The following spec components have been implemented:
 
-1. Build the **SDK and canonical models first**.
-2. Split KinCony into:
-   - board profiles
-   - firmware profiles
-   - transport clients
-3. Implement Shelly using the same `relay/input/meter` canonical capabilities.
-4. Implement generic MQTT and Modbus next so you can reuse them beneath other families.
-5. Add bridge/network controller adapters after the northbound model is stable.
+### Completed
 
-A good first milestone is:
+1. **SDK and canonical models** (`sdk/adapter_api/models.py`, `base.py`, `manifest.py`, `errors.py`, `safety.py`)
+2. **15 protocol adapters** (`adapters/`): KinCony (reference impl), Shelly, MQTT, Modbus, Hue, ONVIF, ESPHome, Zigbee2MQTT, Z-Wave JS, Matter, Lutron, KNX, BACnet, OPC UA, DNP3
+3. **Core runtime** (`core/`): EventBus, StateStore (SQLite/WAL), AdapterRegistry (locks + timeouts), Scheduler (auto-recovery), FastAPI REST API (API key auth, audit log, idempotency)
+4. **Agent Gateway** (`agent/`): SpaceRegistry (YAML-driven semantic names), AISafetyGuard (access levels, rate limits, cooldowns, confirmations), SceneEngine (presets + rules), ToolGenerator (OpenAI/Anthropic/MCP formats), ToolExecutor, MCPServer (stdio JSON-RPC), SmartSpacesClient (sync + async SDK)
+5. **156 tests** across all layers
 
-- `binary_switch`
-- `digital_input`
-- `analog_input`
-- `analog_output`
-- `meter_power`
-- `meter_energy`
-- `cover`
-- `scene`
-- `camera_stream`
-- `thermostat/setpoint`
+### Remaining
 
-That set gets you very far across all three domains: home, commercial, industrial.
+- 14 adapter stubs need real protocol implementations (KinCony is the only reference impl)
+- Subscription/push event support across adapters
+- Multi-tenant site/space graph persistence
+- Scene optimization policies
+- Offline operation and local fallback
 
 ---
 
@@ -2642,17 +2634,13 @@ A conformant adapter system MUST:
 
 ---
 
-## 57. Immediate next step
+## 57. Next priorities
 
-If you want to implement this in code, the first deliverables should be:
+The spec is fully implemented at the interface level. Next priorities:
 
-1. `adapter_api/models.py`
-2. `adapter_api/base.py`
-3. `adapter_api/manifest_schema.py`
-4. `adapters/kincony/` with board + firmware profiles
-5. `adapters/shelly/`
-6. `adapters/mqtt/`
-7. `adapters/modbus/`
-8. contract tests and replay fixtures
-
-After that, you can add the bridge/radio families without changing the northbound contract.
+1. **Flesh out adapter stubs** — implement real protocol logic for Shelly, MQTT, Modbus, Hue (highest value)
+2. **Push event support** — wire adapter `subscribe()` through EventBus to Agent Gateway for real-time state updates
+3. **Multi-tenant persistence** — persist the site/space graph in StateStore alongside device data
+4. **Scene persistence** — save scenes/rules to disk so they survive restarts
+5. **Offline resilience** — local command queuing when network/cloud is down
+6. **Agent SDK distribution** — publish `agent` package so external AI agents can `pip install smartspaces`

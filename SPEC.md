@@ -1,4 +1,8 @@
-# Kincony KC868-A4 — Home Automation Controller Spec
+# Kincony KC868-A4 — Hardware Spec
+
+> This document covers the KC868-A4 hardware, firmware, and low-level protocols.
+> For the full system architecture, see [README.md](README.md).
+> For the adapter interface specification, see [universal_physical_space_adapter_spec_pack.md](universal_physical_space_adapter_spec_pack.md).
 
 ## Overview
 
@@ -435,15 +439,34 @@ Each device gets its own MQTT topic and HTTP endpoint.
 ## File Inventory
 
 ```
-kinco_serial/
-├── SPEC.md                     # This file
-├── kincony_control.py          # Python HTTP control script
-├── probe_device.py             # Serial probe script
-├── probe_v2.py                 # Extended probe script (DTR reset)
-├── deep_probe.py               # Deep investigation script
-├── at_test.py                  # AT command test script
-├── capture_boot.py             # Boot capture script
-└── .gitignore                  # Excludes binaries and sensitive files
+smartspaces/
+├── agent/                      # Agent Gateway (AI → device abstraction)
+│   ├── spaces.py               # Semantic device registry
+│   ├── safety.py               # AI safety guard
+│   ├── scenes.py               # Scene & rule engine
+│   ├── tools.py                # LLM tool definitions & executor
+│   ├── mcp_server.py           # MCP server (Claude Desktop/Code)
+│   └── client.py               # Python SDK (sync + async)
+├── core/                       # Runtime engine
+│   ├── engine.py               # Main entry point
+│   ├── api.py                  # FastAPI REST API
+│   ├── event_bus.py            # Async pub/sub
+│   ├── registry.py             # Adapter lifecycle
+│   ├── scheduler.py            # Poll scheduling
+│   └── state_store.py          # SQLite persistence
+├── sdk/adapter_api/            # Adapter SDK (base class, models)
+├── adapters/                   # 15 protocol adapters
+│   ├── kincony/                # KC868-A4 reference implementation
+│   ├── shelly/ mqtt_generic/ modbus/ hue/ onvif/
+│   ├── esphome/ zigbee/ zwave/ matter/ lutron/
+│   └── knx/ bacnet/ opcua/ dnp3/
+├── fixtures/                   # Example YAML configs
+├── tests/                      # 156 tests
+├── kincony_control.py          # Original KC868-A4 HTTP control script
+├── probe_device.py             # Serial probe (debugging)
+├── SPEC.md                     # This file (hardware spec)
+├── README.md                   # Project overview & quick start
+└── universal_physical_space_adapter_spec_pack.md  # Adapter interface spec
 ```
 
 > Binary dumps (firmware backups, flash dumps, .bin files) are excluded from the repo via `.gitignore`.
