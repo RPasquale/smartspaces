@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -32,8 +33,29 @@ class Engine:
         db_path: str | Path = "state.db",
         default_poll_interval: float = 30.0,
         event_bus_queue_size: int = 10_000,
+        event_bus: str | None = None,
+        redis_url: str | None = None,
     ):
-        self.event_bus = EventBus(max_queue_size=event_bus_queue_size)
+        bus_kind = (
+            event_bus
+            or os.environ.get("SMARTSPACES_EVENT_BUS", "memory")
+        ).lower()
+        _redis_url = (
+            redis_url
+            or os.environ.get("SMARTSPACES_REDIS_URL", "redis://localhost:6379")
+        )
+
+        if bus_kind == "redis":
+            from core.event_bus_redis import RedisEventBus
+
+            self.event_bus = RedisEventBus(
+                redis_url=_redis_url,
+                max_queue_size=event_bus_queue_size,
+            )
+            logger.info("Using RedisEventBus (url=%s)", _redis_url)
+        else:
+            self.event_bus = EventBus(max_queue_size=event_bus_queue_size)
+            logger.info("Using in-process EventBus")
         self.state_store = StateStore(db_path=db_path)
         self.registry = AdapterRegistry(self.event_bus, self.state_store)
         self.scheduler = Scheduler(
@@ -289,6 +311,17 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["text", "json"],
         help="Log format: text (human-readable) or json (structured) (default: text)",
     )
+    parser.add_argument(
+        "--event-bus", default=None,
+        choices=["memory", "redis"],
+        help="Event bus backend: memory (in-process) or redis (default: memory, "
+             "or set SMARTSPACES_EVENT_BUS env var)",
+    )
+    parser.add_argument(
+        "--redis-url", default=None,
+        help="Redis URL for the redis event bus (default: redis://localhost:6379, "
+             "or set SMARTSPACES_REDIS_URL env var)",
+    )
     return parser
 
 
@@ -342,7 +375,11 @@ def main():
         logger.error("No adapters available")
         sys.exit(1)
 
-    engine = Engine(db_path=args.db_path)
+    engine = Engine(
+        db_path=args.db_path,
+        event_bus=args.event_bus,
+        redis_url=args.redis_url,
+    )
     for adapter in adapters_to_register:
         engine.register_adapter(adapter)
 

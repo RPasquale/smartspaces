@@ -30,7 +30,8 @@ lutron = []
 knx = ["xknx>=2.0"]
 bacnet = ["BAC0>=22.0"]
 opcua = ["asyncua>=1.0"]
-dnp3 = []
+dnp3 = ["pydnp3>=0.1"]
+redis = ["redis[hiredis]>=5.0"]
 server = ["fastapi>=0.115", "uvicorn[standard]>=0.34"]
 metrics = ["prometheus-client>=0.20"]
 dev = [
@@ -48,7 +49,7 @@ packages = ["sdk", "adapters", "core", "agent"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "tests/agent", "sdk/adapter_api/contract_tests"]
+testpaths = ["tests", "tests/agent", "tests/integration", "sdk/adapter_api/contract_tests"]
 
 [tool.ruff]
 line-length = 100

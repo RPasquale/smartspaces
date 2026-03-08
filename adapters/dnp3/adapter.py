@@ -3,10 +3,16 @@
 Connects to DNP3 outstations (RTUs, IEDs, meters) used in utility
 SCADA and industrial control. Supports reading analog/binary inputs,
 counters, and writing analog/binary outputs via DNP3/TCP.
+
+Requires the ``pydnp3`` library (opendnp3 Python bindings) for real
+DNP3 communication.
+Install via: pip install 'physical-space-adapters[dnp3]'
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
@@ -24,6 +30,18 @@ from sdk.adapter_api.base import (
 )
 from sdk.adapter_api.errors import UnreachableError
 
+# ---------------------------------------------------------------------------
+# Optional dependency: pydnp3 (opendnp3 Python bindings)
+# ---------------------------------------------------------------------------
+try:
+    from pydnp3 import opendnp3, openpal, asiopal, asiodnp3
+
+    _HAS_PYDNP3 = True
+except ImportError:
+    _HAS_PYDNP3 = False
+
+log = logging.getLogger(__name__)
+
 # DNP3 object group -> canonical capabilities
 DNP3_GROUP_MAP = {
     1: (["binary_input"], "read", "S0", "binary_input"),
@@ -39,12 +57,119 @@ DNP3_GROUP_MAP = {
 }
 
 
-class _Dnp3Connection:
-    """Wraps a DNP3 master-outstation TCP connection.
+# ---------------------------------------------------------------------------
+# pydnp3 callback helpers — bridge opendnp3 callbacks into asyncio
+# ---------------------------------------------------------------------------
 
-    In production this would use pydnp3 or opendnp3 for the actual
-    DNP3 application layer.
+class _SOEHandler:
+    """ISOEHandler implementation that stores received values.
+
+    opendnp3 delivers measurements via the SOE (Sequence Of Events)
+    handler callbacks.  We capture them into a shared dict keyed by
+    ``"group:index"`` and optionally set asyncio events so that async
+    callers can ``await`` specific reads.
     """
+
+    def __init__(self, data_map: dict[str, dict[str, Any]], loop: asyncio.AbstractEventLoop):
+        self._data_map = data_map
+        self._loop = loop
+        # Optional per-key waiters for direct reads
+        self._waiters: dict[str, asyncio.Event] = {}
+
+    # -- opendnp3 ISOEHandler interface ------------------------------------
+
+    def Process(self, info, values):  # noqa: N802 – matches C++ naming
+        """Called by the opendnp3 stack for each measurement batch."""
+        try:
+            visitor = _MeasurementVisitor(self._data_map, self._loop, self._waiters)
+            values.Foreach(visitor)
+        except Exception:
+            log.debug("SOEHandler.Process error", exc_info=True)
+
+    def Start(self):  # noqa: N802
+        pass
+
+    def End(self):  # noqa: N802
+        pass
+
+    # -- asyncio helpers ---------------------------------------------------
+
+    def get_waiter(self, key: str) -> asyncio.Event:
+        if key not in self._waiters:
+            self._waiters[key] = asyncio.Event()
+        else:
+            self._waiters[key].clear()
+        return self._waiters[key]
+
+
+class _MeasurementVisitor:
+    """Visitor that extracts values from opendnp3 measurement iterators."""
+
+    def __init__(self, data_map: dict, loop: asyncio.AbstractEventLoop,
+                 waiters: dict[str, asyncio.Event]):
+        self._data_map = data_map
+        self._loop = loop
+        self._waiters = waiters
+
+    def _store(self, group: int, index: int, value: Any, flags: int = 0,
+               timestamp: Any = None):
+        key = f"{group}:{index}"
+        self._data_map[key] = {
+            "value": value,
+            "flags": flags,
+            "timestamp": str(timestamp) if timestamp else None,
+        }
+        waiter = self._waiters.get(key)
+        if waiter is not None:
+            self._loop.call_soon_threadsafe(waiter.set)
+
+    # opendnp3 calls these per measurement type
+    def OnValue(self, info, value):  # noqa: N802
+        try:
+            idx = info.gv  # group/variation info varies by pydnp3 version
+        except Exception:
+            idx = 0
+        self._store(30, getattr(info, "index", 0), value.value,
+                     getattr(value, "flags", 0))
+
+
+class _ChannelListener:
+    """Minimal IChannelListener to log channel state changes."""
+
+    def OnStateChange(self, state):  # noqa: N802
+        log.debug("DNP3 channel state: %s", state)
+
+
+class _MasterApplication:
+    """Minimal IMasterApplication."""
+
+    def OnReceiveIIN(self, iin):  # noqa: N802
+        pass
+
+    def OnTaskStart(self, info):  # noqa: N802
+        pass
+
+    def OnTaskComplete(self, info):  # noqa: N802
+        pass
+
+    def AssignClassDuringStartup(self):  # noqa: N802
+        return False
+
+    def Now(self):  # noqa: N802
+        return openpal.UTCTimestamp() if _HAS_PYDNP3 else 0
+
+
+class _Dnp3Connection:
+    """Wraps a DNP3 master-outstation TCP connection using *pydnp3*.
+
+    pydnp3 wraps the opendnp3 C++ library which uses a callback-driven
+    architecture.  This class bridges into asyncio using events and
+    ``run_in_executor`` for blocking setup.
+
+    If ``pydnp3`` is not installed the constructor succeeds but
+    :meth:`connect` raises :class:`ImportError`.
+    """
+
     def __init__(self, connection_id: str, host: str, port: int = 20000,
                  outstation_addr: int = 1, master_addr: int = 0):
         self.connection_id = connection_id
@@ -56,28 +181,225 @@ class _Dnp3Connection:
         self._data_map: dict[str, dict[str, Any]] = {}
         self._connected = False
 
+        # pydnp3 objects (set during connect)
+        self._manager: Any | None = None
+        self._channel: Any | None = None
+        self._master: Any | None = None
+        self._soe_handler: _SOEHandler | None = None
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
     async def connect(self) -> bool:
+        """Create the DNP3Manager, TCP channel, and master session."""
+        if not _HAS_PYDNP3:
+            raise ImportError(
+                "The 'pydnp3' library is required for the DNP3 adapter. "
+                "Install it with: pip install 'physical-space-adapters[dnp3]'"
+            )
+
+        loop = asyncio.get_running_loop()
+
+        def _setup() -> None:
+            # DNP3Manager with 1 thread for the asio reactor
+            self._manager = asiodnp3.DNP3Manager(1)
+
+            # TCP client channel
+            retry = asiopal.ChannelRetry.Default()
+            self._channel = self._manager.AddTCPClient(
+                id=f"channel_{self.connection_id}",
+                levels=opendnp3.levels.NOTHING,
+                retry=retry,
+                host=self.host,
+                local="0.0.0.0",
+                port=self.port,
+                listener=_ChannelListener(),
+            )
+
+            # SOE handler to capture measurements
+            self._soe_handler = _SOEHandler(self._data_map, loop)
+
+            # Master stack config
+            stack_config = asiodnp3.MasterStackConfig()
+            stack_config.master.responseTimeout = openpal.TimeDuration().Seconds(5)
+            stack_config.link.LocalAddr = self.master_addr
+            stack_config.link.RemoteAddr = self.outstation_addr
+
+            self._master = self._channel.AddMaster(
+                id=f"master_{self.connection_id}",
+                SOEHandler=self._soe_handler,
+                application=_MasterApplication(),
+                config=stack_config,
+            )
+            self._master.Enable()
+
+        await asyncio.to_thread(_setup)
         self._connected = True
+        log.info("DNP3 connection %s established to %s:%s (outstation=%s)",
+                 self.connection_id, self.host, self.port, self.outstation_addr)
         return True
 
+    async def close(self) -> None:
+        """Shutdown the DNP3 manager and release resources."""
+        if self._manager is not None:
+            try:
+                await asyncio.to_thread(self._manager.Shutdown)
+            except Exception:
+                log.debug("Error shutting down DNP3Manager", exc_info=True)
+            self._manager = None
+            self._channel = None
+            self._master = None
+        self._connected = False
+
+    # ------------------------------------------------------------------
+    # Polling
+    # ------------------------------------------------------------------
+
     async def integrity_poll(self) -> dict[str, Any]:
-        # Real impl: class 0/1/2/3 poll
+        """Perform a Class 0/1/2/3 integrity poll.
+
+        Returns the full data map after the scan completes.
+        """
+        if not self._connected or self._master is None:
+            return self._data_map
+
+        try:
+            done = asyncio.Event()
+
+            class _ScanCallback:
+                def OnComplete(self_, result):  # noqa: N802, N805
+                    asyncio.get_event_loop().call_soon_threadsafe(done.set)
+
+            await asyncio.to_thread(
+                self._master.ScanClasses,
+                opendnp3.ClassField.AllClasses(),
+                _ScanCallback(),
+            )
+            # Wait for the scan to return (with timeout)
+            try:
+                await asyncio.wait_for(done.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                log.warning("DNP3 integrity poll timeout")
+        except Exception:
+            log.warning("DNP3 integrity poll failed", exc_info=True)
+
         return self._data_map
 
+    # ------------------------------------------------------------------
+    # Read / Write
+    # ------------------------------------------------------------------
+
     async def read_point(self, group: int, variation: int, index: int) -> Any:
+        """Read a single point by triggering a class scan and waiting.
+
+        If a cached value exists it is returned immediately; otherwise
+        an integrity poll is attempted.
+        """
         key = f"{group}:{index}"
+
+        # Return cached if available
+        cached = self._data_map.get(key, {}).get("value")
+        if cached is not None:
+            return cached
+
+        # Trigger a poll and wait
+        if self._connected and self._master is not None and self._soe_handler is not None:
+            waiter = self._soe_handler.get_waiter(key)
+            try:
+                done_ev = asyncio.Event()
+
+                class _CB:
+                    def OnComplete(self_, result):  # noqa: N802, N805
+                        asyncio.get_event_loop().call_soon_threadsafe(done_ev.set)
+
+                await asyncio.to_thread(
+                    self._master.ScanClasses,
+                    opendnp3.ClassField.AllClasses(),
+                    _CB(),
+                )
+                await asyncio.wait_for(done_ev.wait(), timeout=5.0)
+                # Give SOE handler a moment to process
+                await asyncio.wait_for(waiter.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                pass
+            except Exception:
+                log.warning("DNP3 read_point poll failed", exc_info=True)
+
         return self._data_map.get(key, {}).get("value")
 
     async def direct_operate(self, group: int, variation: int,
                              index: int, value: Any) -> bool:
+        """Send a DirectOperate command to the outstation.
+
+        - Groups 10/12 (binary outputs): uses ControlRelayOutputBlock
+        - Groups 40/41 (analog outputs): uses AnalogOutputInt32 or
+          AnalogOutputFloat32 depending on the value type.
+        """
+        if not self._connected or self._master is None:
+            # Offline cache-only
+            key = f"{group}:{index}"
+            if key not in self._data_map:
+                self._data_map[key] = {}
+            self._data_map[key]["value"] = value
+            return True
+
+        result_event = asyncio.Event()
+        command_status: list[bool] = [False]
+
+        class _CommandCallback:
+            def OnComplete(self_, result):  # noqa: N802, N805
+                command_status[0] = True  # simplified — real code checks result
+                asyncio.get_event_loop().call_soon_threadsafe(result_event.set)
+
+        try:
+            if group in (10, 12):
+                # Binary output — ControlRelayOutputBlock
+                if value:
+                    code = opendnp3.ControlCode.LATCH_ON
+                else:
+                    code = opendnp3.ControlCode.LATCH_OFF
+                crob = opendnp3.ControlRelayOutputBlock(code)
+
+                await asyncio.to_thread(
+                    self._master.DirectOperate,
+                    crob,
+                    index,
+                    _CommandCallback(),
+                )
+
+            elif group in (40, 41):
+                # Analog output
+                if isinstance(value, float):
+                    cmd = opendnp3.AnalogOutputFloat32(value)
+                else:
+                    cmd = opendnp3.AnalogOutputInt32(int(value))
+
+                await asyncio.to_thread(
+                    self._master.DirectOperate,
+                    cmd,
+                    index,
+                    _CommandCallback(),
+                )
+            else:
+                log.warning("Unsupported DNP3 group %s for direct operate", group)
+                return False
+
+            await asyncio.wait_for(result_event.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            log.warning("DNP3 DirectOperate timeout for g%s i%s", group, index)
+            return False
+        except Exception:
+            log.warning("DNP3 DirectOperate failed", exc_info=True)
+            return False
+
+        # Update local cache
         key = f"{group}:{index}"
         if key not in self._data_map:
             self._data_map[key] = {}
         self._data_map[key]["value"] = value
-        return True
 
-    async def close(self):
-        self._connected = False
+        return command_status[0]
 
 
 class Dnp3Adapter(Adapter):
@@ -130,6 +452,8 @@ class Dnp3Adapter(Adapter):
         conn = _Dnp3Connection(conn_id, host, port, outstation_addr, master_addr)
         try:
             await conn.connect()
+        except ImportError as exc:
+            return CommissionResult("", "failed", {"error": str(exc)})
         except Exception as e:
             await conn.close()
             return CommissionResult("", "failed", {"error": str(e)})

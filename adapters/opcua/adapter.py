@@ -3,10 +3,14 @@
 Connects to OPC UA servers (PLCs, SCADA, HMIs, industrial IoT gateways)
 to browse, read, write, and subscribe to nodes. Uses the asyncua library
 for the OPC UA binary protocol over TCP.
+
+Requires the ``asyncua`` library for real OPC UA communication.
+Install via: pip install 'physical-space-adapters[opcua]'
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
@@ -24,6 +28,19 @@ from sdk.adapter_api.base import (
 )
 from sdk.adapter_api.errors import UnreachableError
 
+# ---------------------------------------------------------------------------
+# Optional dependency: asyncua
+# ---------------------------------------------------------------------------
+try:
+    from asyncua import Client as OpcUaClient
+    from asyncua import ua
+
+    _HAS_ASYNCUA = True
+except ImportError:
+    _HAS_ASYNCUA = False
+
+log = logging.getLogger(__name__)
+
 # OPC UA data type -> canonical mapping
 OPCUA_TYPE_MAP = {
     "Boolean": ("bool", ["binary_sensor"]),
@@ -39,10 +56,13 @@ OPCUA_TYPE_MAP = {
 
 
 class _OpcUaConnection:
-    """Wraps an OPC UA client connection.
+    """Wraps an OPC UA client connection using the *asyncua* library.
 
-    In production this would use asyncua for actual OPC UA communication.
+    If ``asyncua`` is not installed the constructor succeeds but
+    :meth:`connect` raises :class:`ImportError` with installation
+    instructions.
     """
+
     def __init__(self, connection_id: str, endpoint_url: str,
                  username: str | None = None, password: str | None = None):
         self.connection_id = connection_id
@@ -52,27 +72,140 @@ class _OpcUaConnection:
         self.commissioned_at = datetime.now(timezone.utc)
         self._nodes: dict[str, dict[str, Any]] = {}
         self._connected = False
+        self._client: Any | None = None  # asyncua.Client
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     async def connect(self) -> bool:
-        # Real impl: asyncua Client connect
+        """Open an OPC UA session to the server."""
+        if not _HAS_ASYNCUA:
+            raise ImportError(
+                "The 'asyncua' library is required for the OPC UA adapter. "
+                "Install it with: pip install 'physical-space-adapters[opcua]'"
+            )
+
+        self._client = OpcUaClient(url=self.endpoint_url)
+
+        # Apply credentials when provided
+        if self.username and self.password:
+            self._client.set_user(self.username)
+            self._client.set_password(self.password)
+
+        await self._client.connect()
         self._connected = True
+        log.info("OPC UA connection %s established to %s",
+                 self.connection_id, self.endpoint_url)
         return True
 
+    async def close(self) -> None:
+        """Disconnect from the OPC UA server."""
+        if self._client is not None:
+            try:
+                await self._client.disconnect()
+            except Exception:
+                log.debug("Error disconnecting asyncua client", exc_info=True)
+            self._client = None
+        self._connected = False
+
+    # ------------------------------------------------------------------
+    # Browse / Read / Write
+    # ------------------------------------------------------------------
+
     async def browse(self, node_id: str = "i=85") -> list[dict[str, Any]]:
-        # Real impl: browse child nodes
-        return list(self._nodes.values())
+        """Browse children of *node_id* and return their metadata.
+
+        Falls back to the preloaded ``_nodes`` dict when not connected.
+        """
+        if not self._connected or self._client is None:
+            return list(self._nodes.values())
+
+        try:
+            parent = self._client.get_node(node_id)
+            children = await parent.get_children()
+            results: list[dict[str, Any]] = []
+            for child in children:
+                try:
+                    display_name = await child.read_display_name()
+                    name = display_name.Text if display_name else str(child.nodeid)
+                except Exception:
+                    name = str(child.nodeid)
+
+                try:
+                    data_type_node = await child.read_data_type()
+                    # Resolve the data type browse name
+                    dt_node = self._client.get_node(data_type_node)
+                    dt_name_obj = await dt_node.read_browse_name()
+                    data_type = dt_name_obj.Name if dt_name_obj else "Variant"
+                except Exception:
+                    data_type = "Variant"
+
+                try:
+                    access = await child.read_access_level()
+                    writable = bool(
+                        access & ua.AccessLevel.CurrentWrite
+                    ) if isinstance(access, int) else False
+                except Exception:
+                    writable = False
+
+                node_info: dict[str, Any] = {
+                    "node_id": str(child.nodeid),
+                    "name": name,
+                    "data_type": data_type,
+                    "writable": writable,
+                }
+                results.append(node_info)
+                # Cache locally
+                self._nodes[str(child.nodeid)] = node_info
+
+            return results
+        except Exception:
+            log.warning("OPC UA browse failed for %s", node_id, exc_info=True)
+            return list(self._nodes.values())
 
     async def read_value(self, node_id: str) -> Any:
-        node = self._nodes.get(node_id, {})
-        return node.get("value")
+        """Read the current value of an OPC UA node."""
+        if not self._connected or self._client is None:
+            return self._nodes.get(node_id, {}).get("value")
+
+        try:
+            node = self._client.get_node(node_id)
+            value = await node.read_value()
+            # Cache
+            if node_id not in self._nodes:
+                self._nodes[node_id] = {}
+            self._nodes[node_id]["value"] = value
+            return value
+        except Exception:
+            log.warning("OPC UA read failed for %s", node_id, exc_info=True)
+            return self._nodes.get(node_id, {}).get("value")
 
     async def write_value(self, node_id: str, value: Any) -> None:
+        """Write *value* to an OPC UA node."""
+        if not self._connected or self._client is None:
+            if node_id not in self._nodes:
+                self._nodes[node_id] = {}
+            self._nodes[node_id]["value"] = value
+            return
+
+        node = self._client.get_node(node_id)
+        # Attempt to read the data type to construct a proper Variant
+        try:
+            dv = await node.read_data_value()
+            variant_type = dv.Value.VariantType if dv.Value else None
+        except Exception:
+            variant_type = None
+
+        if variant_type is not None:
+            await node.write_value(ua.DataValue(ua.Variant(value, variant_type)))
+        else:
+            await node.write_value(value)
+
+        # Update local cache
         if node_id not in self._nodes:
             self._nodes[node_id] = {}
         self._nodes[node_id]["value"] = value
-
-    async def close(self):
-        self._connected = False
 
 
 class OpcUaAdapter(Adapter):
@@ -129,6 +262,8 @@ class OpcUaAdapter(Adapter):
         conn = _OpcUaConnection(conn_id, url, username, password)
         try:
             await conn.connect()
+        except ImportError as exc:
+            return CommissionResult("", "failed", {"error": str(exc)})
         except Exception as e:
             await conn.close()
             return CommissionResult("", "failed", {"error": str(e)})
@@ -153,7 +288,7 @@ class OpcUaAdapter(Adapter):
             "device_id": server_id,
             "native_device_ref": conn.endpoint_url,
             "device_family": "opcua.server",
-            "name": f"OPC UA Server",
+            "name": "OPC UA Server",
             "connectivity": {"transport": "opcua_tcp", "address": conn.endpoint_url},
             "safety_class": "S1",
         }]

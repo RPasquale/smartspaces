@@ -354,9 +354,10 @@ smartspaces/
 │   ├── spaces_example.yaml
 │   ├── scenes_example.yaml
 │   └── modbus_example_register_map.yaml
-├── tests/                    # Test suite (276 tests)
+├── tests/                    # Test suite (413 tests)
 │   ├── agent/                # Agent Gateway tests (124)
-│   └── core/                 # Core runtime tests (23+)
+│   ├── integration/          # Engine + API integration tests
+│   └── core/                 # Core runtime tests
 ├── CLAUDE.md                 # LLM context for the KinCony hardware
 ├── SPEC.md                   # Hardware specification
 └── universal_physical_space_adapter_spec_pack.md  # Adapter interface spec

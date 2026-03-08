@@ -3,10 +3,15 @@
 Connects to BACnet devices for building automation — AHUs, VAVs,
 chillers, boilers, meters, and general-purpose controllers. Uses
 the BACnet/IP protocol for reading and writing object properties.
+
+Requires the ``BAC0`` library for real BACnet/IP communication.
+Install via: pip install 'physical-space-adapters[bacnet]'
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
@@ -25,6 +30,18 @@ from sdk.adapter_api.base import (
     InventorySnapshot,
 )
 from sdk.adapter_api.errors import UnreachableError
+
+# ---------------------------------------------------------------------------
+# Optional dependency: BAC0
+# ---------------------------------------------------------------------------
+try:
+    import BAC0 as _BAC0_mod
+
+    _HAS_BAC0 = True
+except ImportError:
+    _HAS_BAC0 = False
+
+log = logging.getLogger(__name__)
 
 # BACnet object type -> canonical capabilities
 BACNET_OBJ_MAP = {
@@ -50,10 +67,16 @@ BACNET_UNITS = {
 
 
 class _BacnetConnection:
-    """Wraps a BACnet/IP connection.
+    """Wraps a BACnet/IP connection using the *BAC0* library.
 
-    In production this would use BAC0 or bacpypes for the actual BACnet stack.
+    BAC0 is a synchronous library so all blocking calls are dispatched
+    to a thread via :func:`asyncio.to_thread`.
+
+    If ``BAC0`` is not installed the constructor succeeds but
+    :meth:`connect` raises :class:`ImportError` with installation
+    instructions.
     """
+
     def __init__(self, connection_id: str, host: str, port: int = 47808,
                  device_instance: int | None = None):
         self.connection_id = connection_id
@@ -63,29 +86,127 @@ class _BacnetConnection:
         self.commissioned_at = datetime.now(timezone.utc)
         self._objects: dict[str, dict[str, Any]] = {}
         self._connected = False
+        self._bacnet: Any | None = None  # BAC0 network instance
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     async def connect(self) -> bool:
+        """Start a BAC0 network connection on the local BACnet/IP interface."""
+        if not _HAS_BAC0:
+            raise ImportError(
+                "The 'BAC0' library is required for the BACnet adapter. "
+                "Install it with: pip install 'physical-space-adapters[bacnet]'"
+            )
+
+        # BAC0.connect() is blocking — run in a thread.
+        self._bacnet = await asyncio.to_thread(
+            _BAC0_mod.connect, ip=self.host,
+        )
         self._connected = True
+        log.info("BACnet connection %s established via %s",
+                 self.connection_id, self.host)
         return True
 
-    async def read_property(self, obj_type: str, obj_instance: int, prop: str = "presentValue") -> Any:
-        key = f"{obj_type}:{obj_instance}"
-        obj = self._objects.get(key, {})
-        return obj.get(prop)
+    async def close(self) -> None:
+        """Disconnect from the BACnet network."""
+        if self._bacnet is not None:
+            try:
+                await asyncio.to_thread(self._bacnet.disconnect)
+            except Exception:
+                log.debug("Error disconnecting BAC0", exc_info=True)
+            self._bacnet = None
+        self._connected = False
 
-    async def write_property(self, obj_type: str, obj_instance: int,
-                             prop: str, value: Any, priority: int = 16) -> None:
+    # ------------------------------------------------------------------
+    # Read / Write
+    # ------------------------------------------------------------------
+
+    async def read_property(
+        self,
+        obj_type: str,
+        obj_instance: int,
+        prop: str = "presentValue",
+    ) -> Any:
+        """Read a single property from a BACnet object.
+
+        Uses BAC0's string-based read API:
+        ``bacnet.read("<address> <objType> <inst> <prop>")``.
+        Falls back to local cache when the network call fails.
+        """
+        if not self._connected or self._bacnet is None:
+            key = f"{obj_type}:{obj_instance}"
+            return self._objects.get(key, {}).get(prop)
+
+        try:
+            read_str = f"{self.host} {obj_type} {obj_instance} {prop}"
+            value = await asyncio.to_thread(self._bacnet.read, read_str)
+            # Cache
+            key = f"{obj_type}:{obj_instance}"
+            if key not in self._objects:
+                self._objects[key] = {}
+            self._objects[key][prop] = value
+            return value
+        except Exception:
+            log.warning("BACnet read failed: %s %s %s",
+                        obj_type, obj_instance, prop, exc_info=True)
+            key = f"{obj_type}:{obj_instance}"
+            return self._objects.get(key, {}).get(prop)
+
+    async def write_property(
+        self,
+        obj_type: str,
+        obj_instance: int,
+        prop: str,
+        value: Any,
+        priority: int = 16,
+    ) -> None:
+        """Write a property value to a BACnet object.
+
+        Uses BAC0's string-based write API:
+        ``bacnet.write("<address> <objType> <inst> <prop> <value> - <priority>")``.
+        """
+        if not self._connected or self._bacnet is None:
+            # Offline cache-only write
+            key = f"{obj_type}:{obj_instance}"
+            if key not in self._objects:
+                self._objects[key] = {}
+            self._objects[key][prop] = value
+            return
+
+        write_str = (
+            f"{self.host} {obj_type} {obj_instance} "
+            f"{prop} {value} - {priority}"
+        )
+        await asyncio.to_thread(self._bacnet.write, write_str)
+
+        # Update local cache
         key = f"{obj_type}:{obj_instance}"
         if key not in self._objects:
             self._objects[key] = {}
         self._objects[key][prop] = value
 
     async def who_is(self) -> list[dict[str, Any]]:
-        # Real impl: send WhoIs and collect IAm responses
-        return []
+        """Broadcast a WhoIs and return IAm responses."""
+        if not self._connected or self._bacnet is None:
+            return []
 
-    async def close(self):
-        self._connected = False
+        try:
+            devices = await asyncio.to_thread(self._bacnet.whois)
+            if devices is None:
+                return []
+            results: list[dict[str, Any]] = []
+            for dev in devices:
+                # BAC0 whois returns tuples of (address, device_id)
+                if isinstance(dev, (list, tuple)) and len(dev) >= 2:
+                    results.append({"address": str(dev[0]), "device_id": dev[1]})
+                else:
+                    results.append({"raw": str(dev)})
+            return results
+        except Exception:
+            log.warning("BACnet WhoIs failed", exc_info=True)
+            return []
 
 
 class BacnetAdapter(Adapter):
@@ -138,6 +259,8 @@ class BacnetAdapter(Adapter):
         conn = _BacnetConnection(conn_id, host, port, dev_inst)
         try:
             await conn.connect()
+        except ImportError as exc:
+            return CommissionResult("", "failed", {"error": str(exc)})
         except Exception as e:
             await conn.close()
             return CommissionResult("", "failed", {"error": str(e)})

@@ -3,10 +3,15 @@
 Connects to a KNX/IP gateway via tunneling protocol to read and
 control KNX group addresses. Supports lights, blinds, sensors,
 HVAC, and metering devices on the KNX bus.
+
+Requires the ``xknx`` library for real KNX/IP tunneling.
+Install via: pip install 'physical-space-adapters[knx]'
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
@@ -25,6 +30,24 @@ from sdk.adapter_api.base import (
     InventorySnapshot,
 )
 from sdk.adapter_api.errors import UnreachableError
+
+# ---------------------------------------------------------------------------
+# Optional dependency: xknx
+# ---------------------------------------------------------------------------
+try:
+    import xknx as _xknx_mod
+    from xknx import XKNX
+    from xknx.core import ValueReader
+    from xknx.dpt import DPTArray, DPTBinary
+    from xknx.io import ConnectionConfig, ConnectionType
+    from xknx.telegram import GroupAddress, Telegram
+    from xknx.telegram.apci import GroupValueRead, GroupValueWrite
+
+    _HAS_XKNX = True
+except ImportError:
+    _HAS_XKNX = False
+
+log = logging.getLogger(__name__)
 
 # KNX DPT (Datapoint Type) -> canonical capabilities
 KNX_DPT_MAP = {
@@ -46,11 +69,13 @@ KNX_DPT_MAP = {
 
 
 class _KnxConnection:
-    """Wraps a KNX/IP tunneling connection.
+    """Wraps a KNX/IP tunneling connection using the *xknx* library.
 
-    In production this would use xknx or knxpy for actual KNX/IP tunneling.
-    This implementation provides the HTTP management layer.
+    If ``xknx`` is not installed the constructor succeeds but
+    :meth:`connect` raises :class:`ImportError` with installation
+    instructions so that the adapter fails fast at commission time.
     """
+
     def __init__(self, connection_id: str, host: str, port: int = 3671):
         self.connection_id = connection_id
         self.host = host
@@ -58,22 +83,108 @@ class _KnxConnection:
         self.commissioned_at = datetime.now(timezone.utc)
         self._group_addresses: dict[str, dict[str, Any]] = {}
         self._connected = False
+        self._xknx: Any | None = None  # XKNX instance when connected
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     async def connect(self) -> bool:
-        # Real impl: xknx tunnel connection
+        """Open a KNX/IP tunneling connection to the gateway."""
+        if not _HAS_XKNX:
+            raise ImportError(
+                "The 'xknx' library is required for the KNX adapter. "
+                "Install it with: pip install 'physical-space-adapters[knx]'"
+            )
+
+        connection_config = ConnectionConfig(
+            connection_type=ConnectionType.TUNNELING,
+            gateway_ip=self.host,
+            gateway_port=self.port,
+        )
+        self._xknx = XKNX(connection_config=connection_config)
+        await self._xknx.start()
         self._connected = True
+        log.info("KNX connection %s established to %s:%s",
+                 self.connection_id, self.host, self.port)
         return True
 
+    async def close(self) -> None:
+        """Gracefully shut down the tunneling connection."""
+        if self._xknx is not None:
+            try:
+                await self._xknx.stop()
+            except Exception:
+                log.debug("Error stopping xknx instance", exc_info=True)
+            self._xknx = None
+        self._connected = False
+
+    # ------------------------------------------------------------------
+    # Read / Write
+    # ------------------------------------------------------------------
+
     async def read_group(self, group_address: str) -> Any:
+        """Read the current value of a group address from the KNX bus.
+
+        Sends a *GroupValueRead* telegram and waits for the response.
+        Falls back to the local cache when the bus does not respond.
+        """
+        if not self._connected or self._xknx is None:
+            return self._group_addresses.get(group_address, {}).get("value")
+
+        try:
+            ga = GroupAddress(group_address)
+            # ValueReader sends a GroupRead and waits for the response
+            value_reader = ValueReader(self._xknx, ga, timeout_in_seconds=2.0)
+            telegram = await value_reader.read()
+            if telegram is not None and telegram.payload is not None:
+                raw = telegram.payload.value
+                # Cache locally
+                if group_address not in self._group_addresses:
+                    self._group_addresses[group_address] = {}
+                self._group_addresses[group_address]["value"] = raw
+                return raw
+        except asyncio.TimeoutError:
+            log.warning("KNX read timeout for GA %s", group_address)
+        except Exception:
+            log.warning("KNX read failed for GA %s", group_address, exc_info=True)
+
+        # Fallback to cached value
         return self._group_addresses.get(group_address, {}).get("value")
 
     async def write_group(self, group_address: str, value: Any) -> None:
+        """Write *value* to a group address on the KNX bus.
+
+        Constructs a ``GroupValueWrite`` telegram and sends it through
+        the active tunneling connection.
+        """
+        if not self._connected or self._xknx is None:
+            # Offline cache-only write
+            if group_address not in self._group_addresses:
+                self._group_addresses[group_address] = {}
+            self._group_addresses[group_address]["value"] = value
+            return
+
+        ga = GroupAddress(group_address)
+
+        # Build the payload — single-bit booleans go as DPTBinary,
+        # everything else as DPTArray.
+        if isinstance(value, bool) or (isinstance(value, int) and value in (0, 1)):
+            payload = GroupValueWrite(DPTBinary(int(value)))
+        elif isinstance(value, (list, tuple, bytes)):
+            payload = GroupValueWrite(DPTArray(value))
+        elif isinstance(value, int):
+            payload = GroupValueWrite(DPTArray(value))
+        else:
+            payload = GroupValueWrite(DPTArray(value))
+
+        telegram = Telegram(destination_address=ga, payload=payload)
+        await self._xknx.telegrams.put(telegram)
+
+        # Update local cache
         if group_address not in self._group_addresses:
             self._group_addresses[group_address] = {}
         self._group_addresses[group_address]["value"] = value
-
-    async def close(self):
-        self._connected = False
 
 
 class KnxAdapter(Adapter):
@@ -132,6 +243,8 @@ class KnxAdapter(Adapter):
         conn = _KnxConnection(conn_id, host, port)
         try:
             await conn.connect()
+        except ImportError as exc:
+            return CommissionResult("", "failed", {"error": str(exc)})
         except Exception as e:
             await conn.close()
             return CommissionResult("", "failed", {"error": str(e)})
