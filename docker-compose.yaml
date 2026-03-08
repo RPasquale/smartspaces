@@ -1,0 +1,22 @@
+services:
+  smartspaces:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - smartspaces-data:/data
+      - ./fixtures:/app/config:ro
+    environment:
+      - SMARTSPACES_API_KEYS=${SMARTSPACES_API_KEYS:-}
+      - SMARTSPACES_CORS_ORIGINS=${SMARTSPACES_CORS_ORIGINS:-}
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      - "--db-path"
+      - "/data/state.db"
+    restart: unless-stopped
+
+volumes:
+  smartspaces-data:
