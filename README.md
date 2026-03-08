@@ -354,7 +354,7 @@ smartspaces/
 │   ├── spaces_example.yaml
 │   ├── scenes_example.yaml
 │   └── modbus_example_register_map.yaml
-├── tests/                    # Test suite (256 tests)
+├── tests/                    # Test suite (276 tests)
 │   ├── agent/                # Agent Gateway tests (124)
 │   └── core/                 # Core runtime tests (23+)
 ├── CLAUDE.md                 # LLM context for the KinCony hardware

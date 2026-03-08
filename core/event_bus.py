@@ -14,6 +14,8 @@ import logging
 from collections import defaultdict
 from typing import Any, Callable, Coroutine
 
+from core.metrics import METRICS
+
 logger = logging.getLogger(__name__)
 
 # Subscriber callback type: async fn(event_dict) -> None
@@ -82,12 +84,16 @@ class EventBus:
         """
         await self._queue.put(event)
         self._stats["published"] += 1
+        METRICS.events_published_total.labels(event_type=event.get("type", "unknown")).inc()
+        METRICS.event_queue_depth.set(self._queue.qsize())
 
     def publish_nowait(self, event: dict[str, Any]) -> bool:
         """Non-blocking publish. Returns False if queue is full."""
         try:
             self._queue.put_nowait(event)
             self._stats["published"] += 1
+            METRICS.events_published_total.labels(event_type=event.get("type", "unknown")).inc()
+            METRICS.event_queue_depth.set(self._queue.qsize())
             return True
         except asyncio.QueueFull:
             logger.warning("EventBus queue full, dropping event type=%s", event.get("type"))
@@ -116,9 +122,13 @@ class EventBus:
                 try:
                     await callback(event)
                     self._stats["dispatched"] += 1
+                    METRICS.events_dispatched_total.inc()
                 except Exception:
                     self._stats["errors"] += 1
+                    METRICS.events_errors_total.inc()
                     logger.exception("EventBus subscriber error for event type=%s", event_type)
+
+            METRICS.event_queue_depth.set(self._queue.qsize())
 
     @property
     def stats(self) -> dict[str, int]:

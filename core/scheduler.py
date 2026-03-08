@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.event_bus import EventBus
+from core.metrics import METRICS
 from core.state_store import StateStore
 
 logger = logging.getLogger(__name__)
@@ -164,9 +165,11 @@ class Scheduler:
             )
             target.consecutive_errors = 0
             self._stats["successes"] += 1
+            METRICS.scheduler_polls_total.labels(status="success").inc()
         except asyncio.TimeoutError:
             target.consecutive_errors += 1
             self._stats["timeouts"] += 1
+            METRICS.scheduler_polls_total.labels(status="timeout").inc()
             logger.warning("Poll timeout for %s (%d/%d)",
                          target.point_id, target.consecutive_errors, target.max_errors)
             if target.consecutive_errors >= target.max_errors:
@@ -182,6 +185,7 @@ class Scheduler:
         except Exception:
             target.consecutive_errors += 1
             self._stats["errors"] += 1
+            METRICS.scheduler_polls_total.labels(status="error").inc()
             if target.consecutive_errors >= target.max_errors:
                 target.suspended_at = time.monotonic()
                 logger.warning(
@@ -211,10 +215,14 @@ class Scheduler:
 
     @property
     def stats(self) -> dict[str, Any]:
+        active = sum(1 for t in self._targets.values() if t.consecutive_errors < t.max_errors)
+        suspended = sum(1 for t in self._targets.values() if t.consecutive_errors >= t.max_errors)
+        METRICS.scheduler_targets_active.set(active)
+        METRICS.scheduler_targets_suspended.set(suspended)
         return {
             **self._stats,
-            "active_targets": sum(1 for t in self._targets.values() if t.consecutive_errors < t.max_errors),
-            "suspended_targets": sum(1 for t in self._targets.values() if t.consecutive_errors >= t.max_errors),
+            "active_targets": active,
+            "suspended_targets": suspended,
             "total_targets": len(self._targets),
         }
 

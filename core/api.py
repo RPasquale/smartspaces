@@ -15,6 +15,8 @@ import time
 import uuid
 from typing import Any
 
+from core.metrics import METRICS
+
 from core.registry import AdapterRegistry
 from core.scheduler import Scheduler
 from core.state_store import StateStore
@@ -256,6 +258,61 @@ def create_api(
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    # -- Metrics and correlation middleware --
+
+    @app.middleware("http")
+    async def metrics_middleware(request: Request, call_next):
+        """Track request count, latency, and attach correlation IDs."""
+        from core.logging_config import set_correlation_id, clear_log_context
+        import uuid as _uuid
+
+        # Attach correlation ID
+        cid = request.headers.get("x-correlation-id", _uuid.uuid4().hex[:12])
+        set_correlation_id(cid)
+
+        # Skip metrics for /healthz and /metrics (high volume, low value)
+        path = request.url.path
+        if path in ("/healthz", "/metrics"):
+            response = await call_next(request)
+            clear_log_context()
+            return response
+
+        method = request.method
+        METRICS.requests_in_flight.inc()
+        start = time.monotonic()
+
+        try:
+            response = await call_next(request)
+            duration = time.monotonic() - start
+
+            # Normalize path for metrics (collapse IDs)
+            metric_path = path
+            for prefix in ("/api/agent/confirmations/", "/api/agent/schedules/",
+                           "/api/agent/describe/", "/api/health/"):
+                if path.startswith(prefix) and path != prefix.rstrip("/"):
+                    metric_path = prefix + "{id}"
+                    break
+
+            METRICS.requests_total.labels(
+                method=method, endpoint=metric_path, status=response.status_code,
+            ).inc()
+            METRICS.request_duration_seconds.labels(
+                method=method, endpoint=metric_path,
+            ).observe(duration)
+
+            response.headers["X-Correlation-ID"] = cid
+            return response
+        finally:
+            METRICS.requests_in_flight.dec()
+            clear_log_context()
+
+    # -- Unauthenticated endpoints (healthz, metrics) --
+
+    @app.get("/metrics")
+    async def prometheus_metrics():
+        """Prometheus metrics endpoint (unauthenticated)."""
+        return METRICS.endpoint()
 
     # -- Unauthenticated health probe (for load balancers / k8s) --
 

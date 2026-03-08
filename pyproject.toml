@@ -32,6 +32,7 @@ bacnet = ["BAC0>=22.0"]
 opcua = ["asyncua>=1.0"]
 dnp3 = []
 server = ["fastapi>=0.115", "uvicorn[standard]>=0.34"]
+metrics = ["prometheus-client>=0.20"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
