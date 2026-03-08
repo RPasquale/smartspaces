@@ -5,7 +5,7 @@ control KNX group addresses. Supports lights, blinds, sensors,
 HVAC, and metering devices on the KNX bus.
 
 Requires the ``xknx`` library for real KNX/IP tunneling.
-Install via: pip install 'physical-space-adapters[knx]'
+Install via: pip install 'smartspaces[knx]'
 """
 
 from __future__ import annotations
@@ -94,7 +94,7 @@ class _KnxConnection:
         if not _HAS_XKNX:
             raise ImportError(
                 "The 'xknx' library is required for the KNX adapter. "
-                "Install it with: pip install 'physical-space-adapters[knx]'"
+                "Install it with: pip install 'smartspaces[knx]'"
             )
 
         connection_config = ConnectionConfig(

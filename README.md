@@ -35,7 +35,7 @@ A universal adapter platform for connecting AI agents to physical devices. Contr
 
 ## Current State
 
-The platform is **functionally complete and production-hardened**. All components work together end-to-end.
+The platform is **functionally complete**. All components work together end-to-end. Some state (rate-limit counters, confirmation workflow, idempotency cache) is process-local and will reset on restart — external persistence for these is a planned improvement.
 
 ### What Works Right Now (no hardware needed)
 
@@ -90,15 +90,16 @@ pip install -e ".[server,dev]"
 # Set an API key
 export SMARTSPACES_API_KEYS=my-secret-key
 
-# Start
-python -m core.engine --host 0.0.0.0 --port 8000
-```
+# Start with spaces and scenes loaded
+python -m core.engine \
+  --spaces spaces.yaml \
+  --scenes scenes.yaml
 
-Or with Docker:
-
-```bash
+# Or with Docker (spaces/scenes are loaded from fixtures/ by default)
 docker-compose up
 ```
+
+Without `--spaces` and `--scenes`, the server starts but the agent gateway has no semantic device registry — you'll only be able to use the core adapter/connection/point API, not the `/api/agent/*` endpoints.
 
 ### 2. Define your spaces
 
@@ -406,7 +407,7 @@ python -m core.engine
 
 The Redis event bus is a drop-in replacement — same interface, same subscribe/publish API. It uses Redis Pub/Sub with channel naming `smartspaces:{event_type}`, supports glob pattern subscriptions, and handles reconnection with exponential backoff.
 
-Install: `pip install 'physical-space-adapters[redis]'`
+Install: `pip install 'smartspaces[redis]'`
 
 ## Deployment
 
@@ -590,4 +591,4 @@ This project started as a control script for the **KinCony KC868-A4** — an ESP
 
 ## License
 
-Private repository.
+MIT License. See [LICENSE](LICENSE) for details.

@@ -5,7 +5,7 @@ to browse, read, write, and subscribe to nodes. Uses the asyncua library
 for the OPC UA binary protocol over TCP.
 
 Requires the ``asyncua`` library for real OPC UA communication.
-Install via: pip install 'physical-space-adapters[opcua]'
+Install via: pip install 'smartspaces[opcua]'
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ class _OpcUaConnection:
         if not _HAS_ASYNCUA:
             raise ImportError(
                 "The 'asyncua' library is required for the OPC UA adapter. "
-                "Install it with: pip install 'physical-space-adapters[opcua]'"
+                "Install it with: pip install 'smartspaces[opcua]'"
             )
 
         self._client = OpcUaClient(url=self.endpoint_url)

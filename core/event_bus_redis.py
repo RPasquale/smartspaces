@@ -108,7 +108,7 @@ class RedisEventBus:
         if not _HAS_REDIS:
             raise ImportError(
                 "The 'redis' library is required for RedisEventBus. "
-                "Install it with: pip install 'physical-space-adapters[redis]'"
+                "Install it with: pip install 'smartspaces[redis]'"
             )
         if self._running:
             return

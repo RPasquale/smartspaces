@@ -9,6 +9,8 @@ services:
     environment:
       - SMARTSPACES_API_KEYS=${SMARTSPACES_API_KEYS:-}
       - SMARTSPACES_CORS_ORIGINS=${SMARTSPACES_CORS_ORIGINS:-}
+      - SMARTSPACES_EVENT_BUS=${SMARTSPACES_EVENT_BUS:-memory}
+      - SMARTSPACES_REDIS_URL=${SMARTSPACES_REDIS_URL:-}
     command:
       - "--host"
       - "0.0.0.0"
@@ -16,6 +18,10 @@ services:
       - "8000"
       - "--db-path"
       - "/data/state.db"
+      - "--spaces"
+      - "/app/config/spaces_example.yaml"
+      - "--scenes"
+      - "/app/config/scenes_example.yaml"
     restart: unless-stopped
 
 volumes:

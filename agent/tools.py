@@ -424,6 +424,42 @@ class ToolExecutor:
         self._read_fn = read_fn
         self._execute_fn = execute_fn
 
+    @staticmethod
+    def _resolve_capability(
+        capabilities: list[str],
+        action: str,
+        value: Any,
+    ) -> str:
+        """Pick the best matching capability for the given action/value.
+
+        Instead of blindly taking ``capabilities[0]``, match the action
+        semantics to the most appropriate capability in the list.
+        """
+        if not capabilities:
+            return "binary_switch"
+        if len(capabilities) == 1:
+            return capabilities[0]
+
+        # Action-based heuristics
+        if action in ("on", "off", "toggle"):
+            for c in capabilities:
+                if c in ("binary_switch", "binary_output"):
+                    return c
+        if action == "set" and isinstance(value, (int, float)):
+            for c in capabilities:
+                if c in ("dimmer", "analog_output", "climate_setpoint", "thermostat", "cover"):
+                    return c
+        if action in ("open", "close"):
+            for c in capabilities:
+                if c in ("cover", "blind"):
+                    return c
+        if action in ("lock", "unlock"):
+            for c in capabilities:
+                if c in ("lock", "door_lock"):
+                    return c
+
+        return capabilities[0]
+
     async def call(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         """Execute a tool call and return the result."""
         handler = getattr(self, f"_tool_{tool_name}", None)
@@ -511,7 +547,7 @@ class ToolExecutor:
                 "endpoint_id": mapping.endpoint_id,
                 "device_id": mapping.device_id,
             },
-            "capability": mapping.capabilities[0] if mapping.capabilities else "binary_switch",
+            "capability": self._resolve_capability(mapping.capabilities, action, value),
             "verb": action,
             "params": params,
             "context": {"initiator": "ai_agent"},
@@ -554,10 +590,23 @@ class ToolExecutor:
             })
             results.append(result)
 
+        # Determine overall status from individual results
+        failed = [r for r in results if r.get("error") or r.get("status") == "failed"]
+        pending = [r for r in results if r.get("status") == "confirmation_required"]
+        if failed and not pending:
+            status = "partial_failure" if len(failed) < len(results) else "failed"
+        elif pending:
+            status = "partial_confirmation_required" if len(pending) < len(results) else "confirmation_required"
+        else:
+            status = "completed"
+
         return {
             "scene": scene_name,
             "results": results,
-            "status": "completed",
+            "status": status,
+            "actions_total": len(results),
+            "actions_failed": len(failed),
+            "actions_pending_confirmation": len(pending),
         }
 
     async def _tool_create_scene(self, args: dict) -> dict:

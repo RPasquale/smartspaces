@@ -6,7 +6,7 @@ counters, and writing analog/binary outputs via DNP3/TCP.
 
 Requires the ``pydnp3`` library (opendnp3 Python bindings) for real
 DNP3 communication.
-Install via: pip install 'physical-space-adapters[dnp3]'
+Install via: pip install 'smartspaces[dnp3]'
 """
 
 from __future__ import annotations
@@ -196,7 +196,7 @@ class _Dnp3Connection:
         if not _HAS_PYDNP3:
             raise ImportError(
                 "The 'pydnp3' library is required for the DNP3 adapter. "
-                "Install it with: pip install 'physical-space-adapters[dnp3]'"
+                "Install it with: pip install 'smartspaces[dnp3]'"
             )
 
         loop = asyncio.get_running_loop()

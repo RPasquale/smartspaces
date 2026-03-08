@@ -192,7 +192,7 @@ class Engine:
         try:
             import uvicorn
         except ImportError:
-            logger.error("uvicorn not installed. Run: pip install 'physical-space-adapters[server]'")
+            logger.error("uvicorn not installed. Run: pip install 'smartspaces[server]'")
             return
 
         await self.start(restore_connections=restore)
@@ -202,7 +202,7 @@ class Engine:
             cors_origins=cors_origins,
         )
         if not app:
-            logger.error("FastAPI not installed. Run: pip install 'physical-space-adapters[server]'")
+            logger.error("FastAPI not installed. Run: pip install 'smartspaces[server]'")
             return
 
         config = uvicorn.Config(app, host=host, port=port, log_level="info")

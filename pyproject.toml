@@ -3,9 +3,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "physical-space-adapters"
+name = "smartspaces"
 version = "0.1.0"
-description = "Universal adapter SDK for physical space device control"
+description = "Universal adapter platform for connecting AI agents to physical devices"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.0",

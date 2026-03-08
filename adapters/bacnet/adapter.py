@@ -5,7 +5,7 @@ chillers, boilers, meters, and general-purpose controllers. Uses
 the BACnet/IP protocol for reading and writing object properties.
 
 Requires the ``BAC0`` library for real BACnet/IP communication.
-Install via: pip install 'physical-space-adapters[bacnet]'
+Install via: pip install 'smartspaces[bacnet]'
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ class _BacnetConnection:
         if not _HAS_BAC0:
             raise ImportError(
                 "The 'BAC0' library is required for the BACnet adapter. "
-                "Install it with: pip install 'physical-space-adapters[bacnet]'"
+                "Install it with: pip install 'smartspaces[bacnet]'"
             )
 
         # BAC0.connect() is blocking — run in a thread.
