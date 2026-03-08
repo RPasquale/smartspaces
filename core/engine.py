@@ -7,8 +7,11 @@ convenience methods for registering adapters and running the server.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
+import signal
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +49,7 @@ class Engine:
         """
         self.registry.register(adapter)
 
-    async def start(self) -> None:
+    async def start(self, restore_connections: bool = True) -> None:
         """Start all runtime components."""
         if self._started:
             return
@@ -65,6 +68,14 @@ class Engine:
 
         # Wire up event bus -> state store persistence for point values
         self.event_bus.subscribe("point.reported", self._on_point_reported)
+
+        # Restore previously commissioned connections
+        if restore_connections:
+            try:
+                await self.registry.restore_connections()
+                logger.info("Connection restoration complete")
+            except Exception as e:
+                logger.warning("Connection restoration failed: %s", e)
 
         self._started = True
         logger.info("Engine started")
@@ -89,34 +100,107 @@ class Engine:
         self._started = False
         logger.info("Engine stopped")
 
-    def create_api(self) -> Any:
+    def create_api(
+        self,
+        spaces_path: str | None = None,
+        scenes_path: str | None = None,
+        cors_origins: list[str] | None = None,
+    ) -> Any:
         """Create the FastAPI app wired to this engine.
 
-        Returns the FastAPI app or None if fastapi is not installed.
+        Args:
+            spaces_path: Path to spaces.yaml config file.
+            scenes_path: Path to scenes.yaml config file.
+            cors_origins: List of allowed CORS origins. Reads from
+                          SMARTSPACES_CORS_ORIGINS env var if not provided.
+
+        Returns the FastAPI app instance, or None if fastapi is not installed.
         """
+        import os
+
+        from agent.spaces import SpaceRegistry
+        from agent.scenes import SceneEngine
         from core.api import create_api
-        self._api = create_api(self.registry, self.state_store, self.scheduler)
+
+        space_registry = None
+        scene_engine = None
+
+        if spaces_path:
+            path = Path(spaces_path)
+            if path.exists():
+                space_registry = SpaceRegistry.from_yaml(path)
+                logger.info("Loaded spaces from %s (%d devices)", path, len(space_registry._by_semantic))
+            else:
+                logger.warning("Spaces file not found: %s", path)
+
+        if scenes_path:
+            path = Path(scenes_path)
+            if path.exists():
+                scene_engine = SceneEngine.from_yaml(path)
+                logger.info("Loaded scenes from %s", path)
+            else:
+                logger.warning("Scenes file not found: %s", path)
+
+        # Resolve CORS origins
+        if cors_origins is None:
+            env_origins = os.environ.get("SMARTSPACES_CORS_ORIGINS", "")
+            if env_origins.strip():
+                cors_origins = [o.strip() for o in env_origins.split(",") if o.strip()]
+
+        self._api = create_api(
+            self.registry,
+            self.state_store,
+            self.scheduler,
+            space_registry=space_registry,
+            scene_engine=scene_engine,
+            cors_origins=cors_origins,
+        )
         return self._api
 
-    async def run_server(self, host: str = "0.0.0.0", port: int = 8000) -> None:
-        """Start the engine and run the API server.
-
-        This is the main entry point for running the full system.
-        """
+    async def run_server(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 8000,
+        spaces_path: str | None = None,
+        scenes_path: str | None = None,
+        restore: bool = True,
+        cors_origins: list[str] | None = None,
+    ) -> None:
+        """Start the engine and run the API server."""
         try:
             import uvicorn
         except ImportError:
             logger.error("uvicorn not installed. Run: pip install 'physical-space-adapters[server]'")
             return
 
-        await self.start()
-        app = self.create_api()
+        await self.start(restore_connections=restore)
+        app = self.create_api(
+            spaces_path=spaces_path,
+            scenes_path=scenes_path,
+            cors_origins=cors_origins,
+        )
         if not app:
             logger.error("FastAPI not installed. Run: pip install 'physical-space-adapters[server]'")
             return
 
         config = uvicorn.Config(app, host=host, port=port, log_level="info")
         server = uvicorn.Server(config)
+
+        # Register signal handlers for graceful shutdown
+        shutdown_event = asyncio.Event()
+
+        def _signal_handler(sig: int, _frame: Any) -> None:
+            sig_name = signal.Signals(sig).name
+            logger.info("Received %s, shutting down gracefully...", sig_name)
+            shutdown_event.set()
+            server.should_exit = True
+
+        # SIGINT (Ctrl+C) works on all platforms
+        signal.signal(signal.SIGINT, _signal_handler)
+        # SIGTERM only on Unix
+        if sys.platform != "win32":
+            signal.signal(signal.SIGTERM, _signal_handler)
+
         try:
             await server.serve()
         finally:
@@ -162,12 +246,60 @@ class Engine:
 
 # -- CLI entry point --
 
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="smartspaces",
+        description="SmartSpaces — Universal Physical Space Adapter Runtime",
+    )
+    parser.add_argument(
+        "--host", default="0.0.0.0",
+        help="Bind address (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=8000,
+        help="Listen port (default: 8000)",
+    )
+    parser.add_argument(
+        "--db-path", default="state.db",
+        help="SQLite database path (default: state.db)",
+    )
+    parser.add_argument(
+        "--spaces", default=None, metavar="PATH",
+        help="Path to spaces.yaml config file",
+    )
+    parser.add_argument(
+        "--scenes", default=None, metavar="PATH",
+        help="Path to scenes.yaml config file",
+    )
+    parser.add_argument(
+        "--no-restore", action="store_true",
+        help="Skip restoring previous connections on startup",
+    )
+    parser.add_argument(
+        "--log-level", default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Log level (default: INFO)",
+    )
+    parser.add_argument(
+        "--cors-origins", default=None,
+        help="Comma-separated CORS allowed origins (or set SMARTSPACES_CORS_ORIGINS)",
+    )
+    return parser
+
+
 def main():
     """Run the engine with all available adapters."""
-    import sys
+    # Load .env before anything else
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
+    args = _build_parser().parse_args()
 
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, args.log_level),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
@@ -207,21 +339,23 @@ def main():
         logger.error("No adapters available")
         sys.exit(1)
 
-    engine = Engine()
+    engine = Engine(db_path=args.db_path)
     for adapter in adapters_to_register:
         engine.register_adapter(adapter)
 
-    host = "0.0.0.0"
-    port = 8000
+    cors_origins = None
+    if args.cors_origins:
+        cors_origins = [o.strip() for o in args.cors_origins.split(",") if o.strip()]
 
-    for i, arg in enumerate(sys.argv[1:]):
-        if arg == "--host" and i + 2 < len(sys.argv):
-            host = sys.argv[i + 2]
-        elif arg == "--port" and i + 2 < len(sys.argv):
-            port = int(sys.argv[i + 2])
-
-    logger.info("Starting engine with %d adapters on %s:%d", len(adapters_to_register), host, port)
-    asyncio.run(engine.run_server(host=host, port=port))
+    logger.info("Starting engine with %d adapters on %s:%d", len(adapters_to_register), args.host, args.port)
+    asyncio.run(engine.run_server(
+        host=args.host,
+        port=args.port,
+        spaces_path=args.spaces,
+        scenes_path=args.scenes,
+        restore=not args.no_restore,
+        cors_origins=cors_origins,
+    ))
 
 
 if __name__ == "__main__":

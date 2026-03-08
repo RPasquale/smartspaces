@@ -11,6 +11,7 @@ import hashlib
 import logging
 import os
 import secrets
+import time
 import uuid
 from typing import Any
 
@@ -117,6 +118,7 @@ def create_api(
     space_registry: SpaceRegistry | None = None,
     scene_engine: SceneEngine | None = None,
     safety_config: SafetyConfig | None = None,
+    cors_origins: list[str] | None = None,
 ) -> Any:
     """Create and configure the FastAPI application.
 
@@ -127,6 +129,8 @@ def create_api(
         api_keys: List of valid API key strings. If None, reads from
                   SMARTSPACES_API_KEYS env var (comma-separated) or
                   generates a random key and logs it.
+        cors_origins: List of allowed CORS origins. If provided, adds
+                      CORSMiddleware to the app.
 
     Returns the FastAPI app instance, or None if fastapi is not installed.
     """
@@ -179,8 +183,56 @@ def create_api(
         description="REST API for the Universal Physical Space Adapter system",
     )
 
-    # Track idempotency keys to prevent duplicate command execution
-    _idempotency_cache: dict[str, dict[str, Any]] = {}
+    # CORS middleware
+    if cors_origins:
+        from starlette.middleware.cors import CORSMiddleware
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+    # -- Unauthenticated health probe (for load balancers / k8s) --
+
+    _boot_time = time.time()
+
+    @app.get("/healthz")
+    async def healthz():
+        """Unauthenticated liveness probe."""
+        return {
+            "status": "ok",
+            "uptime_seconds": round(time.time() - _boot_time, 1),
+            "adapters": len(registry.list_adapters()),
+        }
+
+    # Track idempotency keys with TTL to prevent duplicate command execution
+    _IDEMPOTENCY_TTL = 86_400  # 24 hours
+    _idempotency_cache: dict[str, tuple[dict[str, Any], float]] = {}
+
+    def _idempotency_get(key: str) -> dict[str, Any] | None:
+        entry = _idempotency_cache.get(key)
+        if entry is None:
+            return None
+        result, ts = entry
+        if time.time() - ts > _IDEMPOTENCY_TTL:
+            del _idempotency_cache[key]
+            return None
+        return result
+
+    def _idempotency_set(key: str, result: dict[str, Any]) -> None:
+        _idempotency_cache[key] = (result, time.time())
+        # Evict expired entries if cache is large
+        if len(_idempotency_cache) > 10_000:
+            now = time.time()
+            expired = [k for k, (_, ts) in _idempotency_cache.items() if now - ts > _IDEMPOTENCY_TTL]
+            for k in expired:
+                del _idempotency_cache[k]
+            # If still too large, drop oldest
+            if len(_idempotency_cache) > 10_000:
+                oldest = next(iter(_idempotency_cache))
+                del _idempotency_cache[oldest]
 
     # -- Adapters --
 
@@ -348,8 +400,9 @@ def create_api(
         """Execute a command against a device endpoint."""
         # Idempotency check
         if req.idempotency_key:
-            if req.idempotency_key in _idempotency_cache:
-                return _idempotency_cache[req.idempotency_key]
+            cached = _idempotency_get(req.idempotency_key)
+            if cached is not None:
+                return cached
 
         try:
             command = {
@@ -364,11 +417,7 @@ def create_api(
 
             # Cache idempotent result
             if req.idempotency_key:
-                _idempotency_cache[req.idempotency_key] = result
-                # Limit cache size
-                if len(_idempotency_cache) > 10_000:
-                    oldest = next(iter(_idempotency_cache))
-                    del _idempotency_cache[oldest]
+                _idempotency_set(req.idempotency_key, result)
 
             return result
         except Exception as e:

@@ -33,6 +33,7 @@ class SafetyConfig:
     blocked_capabilities: list[str] = field(default_factory=lambda: ["lock", "door_lock"])
     confirm_capabilities: list[str] = field(default_factory=lambda: ["thermostat", "climate_setpoint", "cover"])
     max_concurrent_writes: int = 5
+    confirmation_ttl_seconds: float = 600.0  # 10 minutes
 
 
 class AISafetyGuard:
@@ -163,6 +164,7 @@ class AISafetyGuard:
 
     def approve_confirmation(self, confirmation_id: str) -> dict[str, Any] | None:
         """Approve a pending confirmation. Returns the original request or None."""
+        self._purge_expired_confirmations()
         req = self._pending_confirmations.pop(confirmation_id, None)
         if req:
             req["status"] = "approved"
@@ -170,15 +172,31 @@ class AISafetyGuard:
 
     def deny_confirmation(self, confirmation_id: str) -> None:
         """Deny and remove a pending confirmation."""
+        self._purge_expired_confirmations()
         self._pending_confirmations.pop(confirmation_id, None)
 
     def list_pending_confirmations(self) -> list[dict[str, Any]]:
-        """List all pending confirmation requests."""
+        """List all pending confirmation requests, excluding expired ones."""
+        self._purge_expired_confirmations()
         return [
             {"confirmation_id": cid, **req}
             for cid, req in self._pending_confirmations.items()
             if req["status"] == "pending"
         ]
+
+    def _purge_expired_confirmations(self) -> int:
+        """Remove expired confirmation requests. Returns count removed."""
+        now = time.time()
+        ttl = self.config.confirmation_ttl_seconds
+        expired = [
+            cid for cid, req in self._pending_confirmations.items()
+            if req["status"] == "pending" and (now - req["requested_at"]) > ttl
+        ]
+        for cid in expired:
+            del self._pending_confirmations[cid]
+        if expired:
+            logger.debug("Purged %d expired confirmations", len(expired))
+        return len(expired)
 
     def _get_rate_state(self, name: str) -> RateLimitState:
         if name not in self._rate_limits:
