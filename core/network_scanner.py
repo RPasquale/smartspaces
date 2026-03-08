@@ -81,7 +81,7 @@ class DiscoveredService:
 # ---------------------------------------------------------------------------
 
 try:
-    from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf, IPVersion
+    from zeroconf import IPVersion
     from zeroconf.asyncio import AsyncZeroconf, AsyncServiceBrowser, AsyncServiceInfo
     _HAS_ZEROCONF = True
 except ImportError:
@@ -100,69 +100,69 @@ async def mdns_scan(timeout: float = 10.0) -> list[DiscoveredService]:
 
     results: list[DiscoveredService] = []
     found_names: set[str] = set()
+    discovered_service_names: list[tuple[str, str]] = []  # (service_type, name)
 
     service_types = list(MDNS_SERVICE_MAP.keys()) + [_HTTP_SERVICE]
+
+    def _on_service_state_change(zeroconf, service_type, name, state_change):
+        """Handler called by ServiceBrowser when services are found."""
+        discovered_service_names.append((service_type, name))
 
     azc = AsyncZeroconf(ip_version=IPVersion.V4Only)
     try:
         browsers = []
         for stype in service_types:
             browser = AsyncServiceBrowser(
-                azc.zeroconf, stype, handlers=[]
+                azc.zeroconf, stype, handlers=[_on_service_state_change]
             )
-            browsers.append((stype, browser))
+            browsers.append(browser)
 
         # Let scanning run for the timeout period
         await asyncio.sleep(timeout)
 
-        # Collect results from each browser
-        for stype, browser in browsers:
-            # Get discovered service names from the zeroconf cache
-            names = list(azc.zeroconf.cache.names())
-            for name in names:
-                if name in found_names:
-                    continue
-                if not name.endswith(stype):
-                    continue
-                found_names.add(name)
+        # Resolve details for each discovered service
+        for stype, name in discovered_service_names:
+            if name in found_names:
+                continue
+            found_names.add(name)
 
-                info = AsyncServiceInfo(stype, name)
-                await info.async_request(azc.zeroconf, timeout=3000)
+            info = AsyncServiceInfo(stype, name)
+            await info.async_request(azc.zeroconf, timeout=3000)
 
-                addresses = info.parsed_scoped_addresses(IPVersion.V4Only)
-                if not addresses:
-                    continue
+            addresses = info.parsed_scoped_addresses(IPVersion.V4Only)
+            if not addresses:
+                continue
 
-                host = addresses[0]
-                port = info.port or 80
-                props = {}
-                if info.properties:
-                    for k, v in info.properties.items():
-                        key = k.decode() if isinstance(k, bytes) else str(k)
-                        val = v.decode() if isinstance(v, bytes) else str(v)
-                        props[key] = val
+            host = addresses[0]
+            port = info.port or 80
+            props = {}
+            if info.properties:
+                for k, v in info.properties.items():
+                    key = k.decode() if isinstance(k, bytes) else str(k)
+                    val = v.decode() if isinstance(v, bytes) else str(v)
+                    props[key] = val
 
-                svc_name = info.name or name
-                adapter_id = MDNS_SERVICE_MAP.get(stype)
+            svc_name = info.name or name
+            adapter_id = MDNS_SERVICE_MAP.get(stype)
 
-                # For generic HTTP, try to fingerprint from properties
-                if stype == _HTTP_SERVICE and adapter_id is None:
-                    adapter_id = _fingerprint_http_mdns(props, svc_name)
+            # For generic HTTP, try to fingerprint from properties
+            if stype == _HTTP_SERVICE and adapter_id is None:
+                adapter_id = _fingerprint_http_mdns(props, svc_name)
 
-                if adapter_id:
-                    results.append(DiscoveredService(
-                        protocol="mdns",
-                        service_type=stype,
-                        host=host,
-                        port=port,
-                        name=svc_name,
-                        properties=props,
-                        adapter_id=adapter_id,
-                    ))
+            if adapter_id:
+                results.append(DiscoveredService(
+                    protocol="mdns",
+                    service_type=stype,
+                    host=host,
+                    port=port,
+                    name=svc_name,
+                    properties=props,
+                    adapter_id=adapter_id,
+                ))
 
         # Cancel browsers
-        for _, browser in browsers:
-            browser.cancel()
+        for browser in browsers:
+            await browser.async_cancel()
 
     except Exception:
         logger.exception("mDNS scan error")
@@ -384,6 +384,109 @@ async def port_scan(
 
 
 # ---------------------------------------------------------------------------
+# HTTP probe — identifies Tasmota/Shelly/ESPHome devices on port 80
+# ---------------------------------------------------------------------------
+
+try:
+    import httpx
+    _HAS_HTTPX = True
+except ImportError:
+    _HAS_HTTPX = False
+
+# Known HTTP fingerprint endpoints
+_HTTP_FINGERPRINTS = [
+    # (path, response_key, adapter_id, device_name_key)
+    ("/cm?cmnd=Status%200", "Status", "kincony.family", "DeviceName"),
+    ("/rpc/Shelly.GetDeviceInfo", "id", "shelly.gen2", "id"),
+]
+
+
+async def http_probe(
+    subnet: str | None = None,
+    timeout: float = 20.0,
+    concurrency: int = 50,
+) -> list[DiscoveredService]:
+    """Probe hosts on port 80 for known HTTP device APIs (Tasmota, Shelly, etc.)."""
+    if not _HAS_HTTPX:
+        logger.debug("httpx not available, skipping HTTP probe")
+        return []
+
+    if subnet is None:
+        subnet = _get_local_subnet()
+        if subnet is None:
+            return []
+
+    try:
+        network = ipaddress.IPv4Network(subnet, strict=False)
+    except ValueError:
+        return []
+
+    if network.num_addresses > 1024:
+        return []
+
+    results: list[DiscoveredService] = []
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def _check_host(host_str: str) -> None:
+        async with semaphore:
+            # First check if port 80 is open
+            if not await _probe_port(host_str, 80, timeout=1.0):
+                return
+
+            # Try each fingerprint endpoint
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                for path, resp_key, adapter_id, name_key in _HTTP_FINGERPRINTS:
+                    try:
+                        resp = await client.get(f"http://{host_str}{path}")
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            if resp_key in data:
+                                # Extract device name
+                                name = host_str
+                                if resp_key in data and isinstance(data[resp_key], dict):
+                                    name = data[resp_key].get(name_key, host_str)
+                                elif name_key in data:
+                                    name = data[name_key]
+
+                                props = {}
+                                # For Tasmota, extract useful info
+                                if adapter_id == "kincony.family" and "Status" in data:
+                                    status = data["Status"]
+                                    name = status.get("DeviceName", host_str)
+                                    props["topic"] = status.get("Topic", "")
+                                    props["module"] = str(status.get("Module", ""))
+                                    props["friendly_names"] = str(
+                                        status.get("FriendlyName", [])
+                                    )
+
+                                results.append(DiscoveredService(
+                                    protocol="http_probe",
+                                    service_type=f"http:{path.split('?')[0]}",
+                                    host=host_str,
+                                    port=80,
+                                    name=f"{name} @ {host_str}",
+                                    properties=props,
+                                    adapter_id=adapter_id,
+                                ))
+                                return  # Found a match, stop checking
+                    except Exception:
+                        continue
+
+    tasks = [_check_host(str(addr)) for addr in network.hosts()]
+
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("HTTP probe timed out after %.0fs", timeout)
+
+    logger.info("HTTP probe found %d devices on %s", len(results), subnet)
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -419,7 +522,7 @@ class NetworkScanner:
             List of DiscoveredTarget ready for commissioning.
         """
         if methods is None:
-            methods = ["mdns", "ssdp", "port_scan"]
+            methods = ["mdns", "ssdp", "port_scan", "http_probe"]
 
         # Launch scans in parallel
         tasks: dict[str, asyncio.Task] = {}
@@ -430,6 +533,10 @@ class NetworkScanner:
         if "port_scan" in methods:
             tasks["port_scan"] = asyncio.create_task(
                 port_scan(subnet=subnet, timeout=timeout)
+            )
+        if "http_probe" in methods:
+            tasks["http_probe"] = asyncio.create_task(
+                http_probe(subnet=subnet, timeout=timeout)
             )
 
         all_services: list[DiscoveredService] = []
