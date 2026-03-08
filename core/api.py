@@ -164,6 +164,28 @@ if HAS_FASTAPI:
         at_time: str | None = None
         recurring_seconds: float | None = None
 
+    class NetworkScanRequest(BaseModel):
+        methods: list[str] = Field(
+            default_factory=lambda: ["mdns", "ssdp", "port_scan"],
+            description="Discovery protocols: mdns, ssdp, port_scan",
+        )
+        subnet: str | None = Field(
+            default=None,
+            description="Subnet for port scanning (e.g. 192.168.1.0/24). Auto-detected if None.",
+        )
+        timeout: float = Field(
+            default=15.0,
+            description="Scan timeout in seconds",
+        )
+        auto_commission: bool = Field(
+            default=False,
+            description="Automatically commission discovered devices",
+        )
+        adapter_filter: list[str] | None = Field(
+            default=None,
+            description="Only return results for these adapter IDs",
+        )
+
     class AgentLockRequest(BaseModel):
         device: str
         agent_id: str
@@ -598,6 +620,47 @@ def create_api(
             "event_bus": registry.event_bus.stats,
             "scheduler": scheduler.stats,
         }
+
+    # -- Network Discovery --
+
+    @app.post("/api/network/scan")
+    async def network_scan(req: NetworkScanRequest, _key: str = Depends(verify_api_key)):
+        """Scan the local network for devices using mDNS, SSDP, and port probing."""
+        from core.network_scanner import NetworkScanner
+
+        scanner = NetworkScanner(registry=registry)
+        try:
+            if req.auto_commission:
+                summary = await scanner.scan_and_commission(
+                    methods=req.methods,
+                    subnet=req.subnet,
+                    timeout=req.timeout,
+                    auto_commission=True,
+                )
+                return summary
+            else:
+                targets = await scanner.scan(
+                    methods=req.methods,
+                    subnet=req.subnet,
+                    timeout=req.timeout,
+                    adapter_filter=req.adapter_filter,
+                )
+                return {
+                    "targets_found": len(targets),
+                    "targets": [
+                        {
+                            "discovery_id": t.discovery_id,
+                            "adapter_id": t.adapter_id,
+                            "title": t.title,
+                            "address": t.address,
+                            "confidence": t.confidence,
+                            "fingerprint": t.fingerprint,
+                        }
+                        for t in targets
+                    ],
+                }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=_safe_error(e))
 
     # ====================================================================
     # Agent Gateway API — semantic device control for AI agents

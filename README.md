@@ -76,6 +76,27 @@ The first 11 adapters are fully implemented using HTTP/WebSocket — they work w
 
 Every adapter implements the same abstract interface: `discover`, `commission`, `inventory`, `subscribe`, `read_point`, `execute`, `health`, `teardown`.
 
+### Network Discovery
+
+SmartSpaces can automatically find devices on the local network using three protocols:
+
+- **mDNS/DNS-SD** — Discovers Shelly, ESPHome, Hue, Lutron, Matter devices that advertise via Bonjour/Avahi. Also fingerprints Tasmota/KinCony devices from generic HTTP mDNS records.
+- **SSDP/UPnP** — Finds Hue bridges and other UPnP devices via UDP multicast to `239.255.255.250:1900`.
+- **Port scanning** — Probes the local /24 subnet for Zigbee2MQTT (8080), Z-Wave JS (3000), and Matter server (5580) via async TCP connect.
+
+```bash
+# Auto-discover and commission devices on startup
+python -m core.engine --auto-discover --spaces spaces.yaml --scenes scenes.yaml
+
+# Or scan via API
+curl -X POST http://localhost:8000/api/network/scan \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"methods": ["mdns", "ssdp", "port_scan"], "timeout": 15, "auto_commission": true}'
+```
+
+Install the optional `zeroconf` library for mDNS: `pip install 'smartspaces[discovery]'`. SSDP and port scanning work with no extra dependencies.
+
 ## Quick Start
 
 ### Install
@@ -289,6 +310,7 @@ Every response includes an `X-Correlation-ID` header for request tracing. Pass y
 | GET    | `/api/scheduler`                   | Scheduler status               |
 | GET    | `/api/audit`                       | Audit log                      |
 | GET    | `/api/system/stats`                | System statistics              |
+| POST   | `/api/network/scan`                | Network discovery (mDNS/SSDP/port scan) |
 
 ### Agent Gateway Endpoints
 
@@ -452,7 +474,10 @@ python -m core.engine \
   --log-format json \
   --event-bus memory \
   --cors-origins "http://localhost:3000,http://localhost:5173" \
-  --no-restore
+  --no-restore \
+  --auto-discover \
+  --discover-timeout 15 \
+  --discover-subnet 192.168.1.0/24
 ```
 
 ### CI/CD (GitHub Actions)

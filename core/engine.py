@@ -322,6 +322,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Redis URL for the redis event bus (default: redis://localhost:6379, "
              "or set SMARTSPACES_REDIS_URL env var)",
     )
+    parser.add_argument(
+        "--auto-discover", action="store_true",
+        help="Run network discovery on startup to find devices automatically",
+    )
+    parser.add_argument(
+        "--discover-timeout", type=float, default=15.0,
+        help="Network discovery timeout in seconds (default: 15)",
+    )
+    parser.add_argument(
+        "--discover-subnet", default=None,
+        help="Subnet for port scanning (e.g. 192.168.1.0/24). Auto-detected if not set.",
+    )
     return parser
 
 
@@ -388,14 +400,64 @@ def main():
         cors_origins = [o.strip() for o in args.cors_origins.split(",") if o.strip()]
 
     logger.info("Starting engine with %d adapters on %s:%d", len(adapters_to_register), args.host, args.port)
-    asyncio.run(engine.run_server(
-        host=args.host,
-        port=args.port,
-        spaces_path=args.spaces,
-        scenes_path=args.scenes,
-        restore=not args.no_restore,
-        cors_origins=cors_origins,
-    ))
+
+    async def _run():
+        await engine.start(restore_connections=not args.no_restore)
+
+        # Run auto-discovery if requested
+        if args.auto_discover:
+            from core.network_scanner import NetworkScanner
+            scanner = NetworkScanner(registry=engine.registry)
+            logger.info("Running network discovery (timeout=%.0fs)...", args.discover_timeout)
+            summary = await scanner.scan_and_commission(
+                subnet=args.discover_subnet,
+                timeout=args.discover_timeout,
+                auto_commission=True,
+            )
+            logger.info(
+                "Discovery complete: %d targets found, %d commissioned, %d errors",
+                summary["targets_found"],
+                len(summary["commissioned"]),
+                len(summary["errors"]),
+            )
+            for err in summary["errors"]:
+                logger.warning("Discovery error: %s @ %s — %s",
+                               err["adapter_id"], err["address"], err["error"])
+
+        app = engine.create_api(
+            spaces_path=args.spaces,
+            scenes_path=args.scenes,
+            cors_origins=cors_origins,
+        )
+        if not app:
+            logger.error("FastAPI not installed. Run: pip install 'smartspaces[server]'")
+            return
+
+        import uvicorn
+        config = uvicorn.Config(app, host=args.host, port=args.port, log_level="info")
+        server = uvicorn.Server(config)
+
+        def _signal_handler(sig: int, _frame: Any) -> None:
+            sig_name = signal.Signals(sig).name
+            logger.info("Received %s, shutting down gracefully...", sig_name)
+            server.should_exit = True
+
+        signal.signal(signal.SIGINT, _signal_handler)
+        if sys.platform != "win32":
+            signal.signal(signal.SIGTERM, _signal_handler)
+
+        try:
+            await server.serve()
+        finally:
+            await engine.stop()
+
+    try:
+        import uvicorn  # noqa: F401
+    except ImportError:
+        logger.error("uvicorn not installed. Run: pip install 'smartspaces[server]'")
+        sys.exit(1)
+
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":

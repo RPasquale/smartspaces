@@ -271,6 +271,7 @@ Enable/disable: `Rule1 1` (enable) / `Rule1 0` (disable).
 - `scheduler.py` — poll scheduling with 15s timeouts and auto-recovery
 - `logging_config.py` — structured logging (JSON/text formatters, correlation IDs via contextvars)
 - `metrics.py` — Prometheus metrics (with no-op stubs when prometheus-client not installed)
+- `network_scanner.py` — network discovery (mDNS/DNS-SD, SSDP/UPnP, async port scanning) with `--auto-discover` CLI flag and `POST /api/network/scan` endpoint
 
 ### Adapter SDK (`sdk/adapter_api/`)
 - `base.py` — abstract `Adapter` ABC: discover/commission/inventory/subscribe/read_point/execute/health/teardown
