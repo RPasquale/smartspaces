@@ -1,0 +1,94 @@
+site: "my_home"
+
+spaces:
+  living_room:
+    display_name: "Living Room"
+    devices:
+      ceiling_light:
+        point_id: "dev_kc868_a4_192_168_1_100_relay_1_state"
+        connection_id: "tasmota_abc123"
+        capabilities: [binary_switch]
+        ai_access: full
+        safety_class: S1
+
+      lamp:
+        point_id: "dev_shelly_192_168_1_101_switch_0_output"
+        connection_id: "shelly_def456"
+        capabilities: [binary_switch, dimmer]
+        ai_access: full
+        safety_class: S1
+
+      temperature:
+        point_id: "dev_esphome_192_168_1_102_sensor_temp_state"
+        connection_id: "esphome_ghi789"
+        capabilities: [temperature_sensor]
+        ai_access: read_only
+        unit: "°C"
+        value_type: float
+
+      fan:
+        point_id: "dev_kc868_a4_192_168_1_100_relay_2_state"
+        connection_id: "tasmota_abc123"
+        capabilities: [fan, binary_switch]
+        ai_access: full
+        safety_class: S1
+
+  bedroom:
+    display_name: "Bedroom"
+    devices:
+      main_light:
+        point_id: "dev_hue_light_1_brightness"
+        connection_id: "hue_jkl012"
+        capabilities: [dimmer, light_color]
+        ai_access: full
+        safety_class: S1
+
+      bedside_lamp:
+        point_id: "dev_shelly_192_168_1_103_switch_0_output"
+        connection_id: "shelly_mno345"
+        capabilities: [binary_switch, dimmer]
+        ai_access: full
+        safety_class: S1
+
+  kitchen:
+    display_name: "Kitchen"
+    devices:
+      overhead_light:
+        point_id: "dev_kc868_a4_192_168_1_100_relay_3_state"
+        connection_id: "tasmota_abc123"
+        capabilities: [binary_switch]
+        ai_access: full
+
+      smoke_detector:
+        point_id: "dev_z2m_sensor_smoke_1_state"
+        connection_id: "z2m_pqr678"
+        capabilities: [binary_sensor]
+        ai_access: read_only
+        safety_class: S0
+
+  garage:
+    display_name: "Garage"
+    devices:
+      door:
+        point_id: "dev_shelly_192_168_1_104_cover_0_position"
+        connection_id: "shelly_stu901"
+        capabilities: [cover]
+        ai_access: confirm_required
+        safety_class: S2
+
+      motion_sensor:
+        point_id: "dev_z2m_sensor_motion_1_state"
+        connection_id: "z2m_pqr678"
+        capabilities: [binary_sensor]
+        ai_access: read_only
+        safety_class: S0
+
+  front_door:
+    display_name: "Front Door"
+    devices:
+      lock:
+        point_id: "dev_zwave_node_5_door_lock_lock_state_value"
+        connection_id: "zwave_vwx234"
+        capabilities: [lock, door_lock]
+        ai_access: blocked
+        safety_class: S2

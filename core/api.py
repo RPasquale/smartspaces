@@ -19,6 +19,11 @@ from core.scheduler import Scheduler
 from core.state_store import StateStore
 from sdk.adapter_api.base import ConnectionProfile, DiscoveryRequest, SecretRef
 
+from agent.safety import AISafetyGuard, SafetyConfig
+from agent.scenes import SceneEngine
+from agent.spaces import SpaceRegistry
+from agent.tools import ToolExecutor, ToolGenerator
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -100,6 +105,9 @@ def create_api(
     state_store: StateStore,
     scheduler: Scheduler,
     api_keys: list[str] | None = None,
+    space_registry: SpaceRegistry | None = None,
+    scene_engine: SceneEngine | None = None,
+    safety_config: SafetyConfig | None = None,
 ) -> Any:
     """Create and configure the FastAPI application.
 
@@ -412,5 +420,150 @@ def create_api(
             "event_bus": registry.event_bus.stats,
             "scheduler": scheduler.stats,
         }
+
+    # ====================================================================
+    # Agent Gateway API — semantic device control for AI agents
+    # ====================================================================
+
+    _space_registry = space_registry or SpaceRegistry()
+    _scene_engine = scene_engine or SceneEngine()
+    _safety_guard = AISafetyGuard(_space_registry, safety_config)
+    _tool_executor = ToolExecutor(
+        _space_registry, _safety_guard, _scene_engine,
+        read_fn=registry.read_point,
+        execute_fn=registry.execute,
+    )
+    _tool_generator = ToolGenerator(_space_registry)
+
+    @app.get("/api/agent/spaces")
+    async def agent_list_spaces(_key: str = Depends(verify_api_key)):
+        """List all spaces and their devices."""
+        return {"spaces": _space_registry.list_spaces()}
+
+    @app.get("/api/agent/devices")
+    async def agent_list_devices(
+        space: str | None = None,
+        capability: str | None = None,
+        _key: str = Depends(verify_api_key),
+    ):
+        """List devices with optional filters."""
+        return {"devices": _space_registry.list_devices(space=space, capability=capability)}
+
+    @app.post("/api/agent/state")
+    async def agent_get_state(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+        """Read the current state of a device by semantic name."""
+        result = await _tool_executor.call("get_device_state", req)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+
+    @app.post("/api/agent/set")
+    async def agent_set_device(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+        """Control a device by semantic name."""
+        result = await _tool_executor.call("set_device", req)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+
+    @app.post("/api/agent/space_summary")
+    async def agent_space_summary(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+        """Get states of all devices in a space."""
+        result = await _tool_executor.call("get_space_summary", req)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+
+    @app.get("/api/agent/scenes")
+    async def agent_list_scenes(_key: str = Depends(verify_api_key)):
+        """List available scenes."""
+        return {"scenes": _scene_engine.list_scenes()}
+
+    @app.post("/api/agent/scenes")
+    async def agent_create_scene(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+        """Create a new scene."""
+        result = await _tool_executor.call("create_scene", req)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+
+    @app.post("/api/agent/scenes/activate")
+    async def agent_activate_scene(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+        """Activate a named scene."""
+        result = await _tool_executor.call("activate_scene", req)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+
+    @app.get("/api/agent/rules")
+    async def agent_list_rules(_key: str = Depends(verify_api_key)):
+        """List automation rules."""
+        return {"rules": _scene_engine.list_rules()}
+
+    @app.post("/api/agent/rules")
+    async def agent_create_rule(req: dict[str, Any], _key: str = Depends(verify_api_key)):
+        """Create an automation rule."""
+        try:
+            rule = _scene_engine.add_rule(
+                name=req["name"],
+                display_name=req.get("display_name", req["name"]),
+                condition=req["condition"],
+                actions=req["actions"],
+                cooldown_sec=req.get("cooldown_sec", 60.0),
+            )
+            return {"status": "created", "rule": rule.name}
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=_safe_error(e))
+
+    @app.get("/api/agent/tools/{format}")
+    async def agent_tool_definitions(format: str, _key: str = Depends(verify_api_key)):
+        """Get LLM tool definitions in the specified format."""
+        if format == "openai":
+            return {"tools": _tool_generator.openai_tools()}
+        elif format == "anthropic":
+            return {"tools": _tool_generator.anthropic_tools()}
+        elif format == "mcp":
+            return {"tools": _tool_generator.mcp_tools()}
+        elif format == "raw":
+            return {"tools": _tool_generator.raw_definitions()}
+        raise HTTPException(status_code=400, detail=f"Unknown format: {format}")
+
+    @app.get("/api/agent/context")
+    async def agent_context_prompt(_key: str = Depends(verify_api_key)):
+        """Get a text summary of all devices for injection into LLM system prompts."""
+        return {"context": _space_registry.to_context_prompt()}
+
+    @app.get("/api/agent/confirmations")
+    async def agent_list_confirmations(_key: str = Depends(verify_api_key)):
+        """List operations pending human confirmation."""
+        return {"confirmations": _safety_guard.list_pending_confirmations()}
+
+    @app.post("/api/agent/confirmations/{confirmation_id}/approve")
+    async def agent_approve_confirmation(
+        confirmation_id: str, _key: str = Depends(verify_api_key),
+    ):
+        """Approve a pending confirmation and execute the operation."""
+        req = _safety_guard.approve_confirmation(confirmation_id)
+        if not req:
+            raise HTTPException(status_code=404, detail="Confirmation not found")
+        # Execute the approved operation
+        result = await _tool_executor.call("set_device", {
+            "device": req["device_name"],
+            "action": req["action"],
+            "value": req.get("value"),
+        })
+        return result
+
+    @app.post("/api/agent/confirmations/{confirmation_id}/deny")
+    async def agent_deny_confirmation(
+        confirmation_id: str, _key: str = Depends(verify_api_key),
+    ):
+        """Deny a pending confirmation."""
+        _safety_guard.deny_confirmation(confirmation_id)
+        return {"status": "denied", "confirmation_id": confirmation_id}
+
+    @app.get("/api/agent/safety/stats")
+    async def agent_safety_stats(_key: str = Depends(verify_api_key)):
+        """Get AI safety guard statistics."""
+        return {"stats": _safety_guard.stats}
 
     return app

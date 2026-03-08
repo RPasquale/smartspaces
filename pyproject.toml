@@ -39,11 +39,11 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["sdk", "adapters", "core"]
+packages = ["sdk", "adapters", "core", "agent"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "sdk/adapter_api/contract_tests"]
+testpaths = ["tests", "tests/agent", "sdk/adapter_api/contract_tests"]
 
 [tool.ruff]
 line-length = 100

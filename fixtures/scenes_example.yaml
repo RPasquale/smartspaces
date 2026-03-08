@@ -1,0 +1,78 @@
+scenes:
+  movie_mode:
+    display_name: "Movie Mode"
+    tags: [entertainment, evening]
+    actions:
+      - device: living_room.ceiling_light
+        action: "off"
+      - device: living_room.lamp
+        action: set
+        value: 15
+      - device: bedroom.main_light
+        action: "off"
+
+  goodnight:
+    display_name: "Goodnight"
+    tags: [sleep, evening]
+    actions:
+      - device: living_room.ceiling_light
+        action: "off"
+      - device: living_room.lamp
+        action: "off"
+      - device: kitchen.overhead_light
+        action: "off"
+      - device: bedroom.bedside_lamp
+        action: set
+        value: 5
+
+  all_off:
+    display_name: "All Off"
+    tags: [security, away]
+    actions:
+      - device: living_room.ceiling_light
+        action: "off"
+      - device: living_room.lamp
+        action: "off"
+      - device: living_room.fan
+        action: "off"
+      - device: bedroom.main_light
+        action: "off"
+      - device: bedroom.bedside_lamp
+        action: "off"
+      - device: kitchen.overhead_light
+        action: "off"
+
+  morning:
+    display_name: "Morning Routine"
+    tags: [morning, routine]
+    actions:
+      - device: kitchen.overhead_light
+        action: "on"
+      - device: bedroom.main_light
+        action: set
+        value: 80
+      - device: living_room.ceiling_light
+        action: "on"
+
+rules:
+  auto_cooling:
+    display_name: "Auto Cooling"
+    condition:
+      device: living_room.temperature
+      operator: ">"
+      value: 28
+    actions:
+      - device: living_room.fan
+        action: "on"
+    cooldown_sec: 300
+
+  auto_cooling_off:
+    display_name: "Auto Cooling Off"
+    condition:
+      device: living_room.temperature
+      operator: "<"
+      value: 24
+    actions:
+      - device: living_room.fan
+        action: "off"
+    cooldown_sec: 300
