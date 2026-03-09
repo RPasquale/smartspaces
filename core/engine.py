@@ -405,15 +405,30 @@ def main():
         await engine.start(restore_connections=not args.no_restore)
 
         # Run auto-discovery if requested
+        continuous_task = None
         if args.auto_discover:
             from core.network_scanner import NetworkScanner
             scanner = NetworkScanner(registry=engine.registry)
             logger.info("Running network discovery (timeout=%.0fs)...", args.discover_timeout)
-            summary = await scanner.scan_and_commission(
-                subnet=args.discover_subnet,
-                timeout=args.discover_timeout,
-                auto_commission=True,
-            )
+
+            # If no spaces.yaml provided, auto-generate one from discovery
+            spaces_path = args.spaces
+            if not spaces_path:
+                summary = await scanner.scan_commission_and_generate(
+                    subnet=args.discover_subnet,
+                    timeout=args.discover_timeout,
+                    output_path="spaces_auto.yaml",
+                )
+                if summary.get("spaces_yaml"):
+                    spaces_path = summary["spaces_yaml"]
+                    logger.info("Auto-generated %s", spaces_path)
+            else:
+                summary = await scanner.scan_and_commission(
+                    subnet=args.discover_subnet,
+                    timeout=args.discover_timeout,
+                    auto_commission=True,
+                )
+
             logger.info(
                 "Discovery complete: %d targets found, %d commissioned, %d errors",
                 summary["targets_found"],
@@ -421,11 +436,22 @@ def main():
                 len(summary["errors"]),
             )
             for err in summary["errors"]:
-                logger.warning("Discovery error: %s @ %s — %s",
+                logger.warning("Discovery error: %s @ %s -- %s",
                                err["adapter_id"], err["address"], err["error"])
 
+            # Start continuous background discovery
+            async def _on_new_device(target):
+                logger.info("New device appeared: %s (%s) at %s",
+                            target.title, target.adapter_id, target.address)
+
+            continuous_task = await scanner.start_continuous(
+                interval=120.0,
+                subnet=args.discover_subnet,
+                on_new_device=_on_new_device,
+            )
+
         app = engine.create_api(
-            spaces_path=args.spaces,
+            spaces_path=spaces_path if args.auto_discover else args.spaces,
             scenes_path=args.scenes,
             cors_origins=cors_origins,
         )
@@ -449,6 +475,9 @@ def main():
         try:
             await server.serve()
         finally:
+            if continuous_task and not continuous_task.done():
+                scanner.stop_continuous()
+                continuous_task.cancel()
             await engine.stop()
 
     try:

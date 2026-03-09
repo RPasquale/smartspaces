@@ -99,15 +99,21 @@ class MCPServer:
         if method == "resources/list":
             resources = [
                 {
-                    "uri": f"smartspaces://devices",
+                    "uri": "smartspaces://devices",
                     "name": "Device Registry",
                     "description": "All available devices and their current configuration",
                     "mimeType": "text/plain",
                 },
                 {
-                    "uri": f"smartspaces://scenes",
+                    "uri": "smartspaces://scenes",
                     "name": "Scenes",
                     "description": "Available scenes and automation rules",
+                    "mimeType": "application/json",
+                },
+                {
+                    "uri": "smartspaces://network",
+                    "name": "Network Discovery",
+                    "description": "Scan the local network for smart devices",
                     "mimeType": "application/json",
                 },
             ]
@@ -132,6 +138,16 @@ class MCPServer:
                             "scenes": self.scenes.list_scenes(),
                             "rules": self.scenes.list_rules(),
                         }, indent=2),
+                    }],
+                })
+            elif uri == "smartspaces://network":
+                # Run a quick network scan
+                result = await self.executor.call("discover_devices", {"timeout": 10})
+                return self._respond(msg_id, {
+                    "contents": [{
+                        "uri": uri,
+                        "mimeType": "application/json",
+                        "text": json.dumps(result, indent=2, default=str),
                     }],
                 })
             return self._error(msg_id, -32602, f"Unknown resource: {uri}")

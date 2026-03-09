@@ -85,6 +85,13 @@ class SceneEngine:
         self.scenes: dict[str, Scene] = {}
         self.rules: dict[str, Rule] = {}
 
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "SceneEngine":
+        """Create a SceneEngine and load from a YAML file."""
+        engine = cls()
+        engine.load_yaml(path)
+        return engine
+
     def load_yaml(self, path: str | Path) -> None:
         """Load scenes and rules from a YAML file."""
         with open(path) as f:

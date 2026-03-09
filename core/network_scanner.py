@@ -1,11 +1,12 @@
 """Network scanner — discovers devices on the local network.
 
-Scans using mDNS/DNS-SD, SSDP, and async port probing, then maps
-discovered services to SmartSpaces adapter IDs. Provides both
-one-shot scanning and a background continuous discovery mode.
+Scans using mDNS/DNS-SD, SSDP, async port probing, and HTTP fingerprinting,
+then maps discovered services to SmartSpaces adapter IDs. Provides one-shot
+scanning, auto-commissioning, spaces.yaml generation, and background
+continuous discovery.
 
 Requires ``zeroconf`` for mDNS (``pip install 'smartspaces[discovery]'``).
-SSDP and port scanning use only the standard library.
+SSDP, port scanning, and HTTP probing use only the standard library + httpx.
 """
 
 from __future__ import annotations
@@ -17,9 +18,12 @@ import socket
 import struct
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-from sdk.adapter_api.base import DiscoveredTarget
+import yaml
+
+from sdk.adapter_api.base import DiscoveredTarget, InventorySnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -664,3 +668,259 @@ class NetworkScanner:
                     })
 
         return summary
+
+    async def scan_commission_and_generate(
+        self,
+        methods: list[str] | None = None,
+        subnet: str | None = None,
+        timeout: float = 15.0,
+        output_path: str | Path = "spaces_auto.yaml",
+        site_name: str = "my_home",
+    ) -> dict[str, Any]:
+        """Full auto-setup: scan, commission, inventory, and generate spaces.yaml.
+
+        This is the one-call solution: discovers devices on the network,
+        commissions them, inventories all their points, and writes a
+        spaces.yaml mapping every endpoint to a semantic name.
+        """
+        summary = await self.scan_and_commission(
+            methods=methods, subnet=subnet, timeout=timeout,
+            auto_commission=True,
+        )
+
+        if not self._registry or not summary["commissioned"]:
+            summary["spaces_yaml"] = None
+            return summary
+
+        # Inventory all commissioned connections
+        all_snapshots: list[tuple[dict, InventorySnapshot]] = []
+        for comm in summary["commissioned"]:
+            try:
+                snapshot = await self._registry.inventory(comm["connection_id"])
+                all_snapshots.append((comm, snapshot))
+            except Exception as e:
+                logger.warning("Inventory failed for %s: %s", comm["connection_id"], e)
+
+        # Generate spaces.yaml
+        spaces_data = generate_spaces_yaml(all_snapshots, site_name=site_name)
+        output = Path(output_path)
+        output.write_text(yaml.dump(spaces_data, default_flow_style=False, sort_keys=False))
+        logger.info("Generated %s with %d spaces", output, len(spaces_data.get("spaces", {})))
+        summary["spaces_yaml"] = str(output)
+        summary["spaces_data"] = spaces_data
+
+        return summary
+
+    async def start_continuous(
+        self,
+        interval: float = 60.0,
+        methods: list[str] | None = None,
+        subnet: str | None = None,
+        on_new_device: Any = None,
+    ) -> asyncio.Task:
+        """Start background continuous discovery.
+
+        Periodically rescans and calls on_new_device(target) for each
+        newly-discovered device.
+
+        Returns the background task (cancel it to stop).
+        """
+        self._known_hosts: set[tuple[str, str]] = set()
+        self._continuous_running = True
+
+        # Seed known hosts from initial scan
+        try:
+            initial = await self.scan(methods=methods, subnet=subnet, timeout=15.0)
+            for t in initial:
+                self._known_hosts.add((t.address, t.adapter_id))
+        except Exception:
+            logger.debug("Initial continuous scan failed", exc_info=True)
+
+        async def _loop():
+            while self._continuous_running:
+                await asyncio.sleep(interval)
+                try:
+                    targets = await self.scan(
+                        methods=methods or ["http_probe", "mdns"],
+                        subnet=subnet,
+                        timeout=15.0,
+                    )
+                    for t in targets:
+                        key = (t.address, t.adapter_id)
+                        if key not in self._known_hosts:
+                            self._known_hosts.add(key)
+                            logger.info(
+                                "New device discovered: %s (%s) at %s",
+                                t.title, t.adapter_id, t.address,
+                            )
+                            if on_new_device:
+                                try:
+                                    result = on_new_device(t)
+                                    if asyncio.iscoroutine(result):
+                                        await result
+                                except Exception:
+                                    logger.exception("on_new_device callback failed")
+                except Exception:
+                    logger.debug("Continuous scan cycle failed", exc_info=True)
+
+        task = asyncio.create_task(_loop())
+        logger.info("Continuous discovery started (interval=%.0fs)", interval)
+        return task
+
+    def stop_continuous(self) -> None:
+        """Signal the continuous discovery loop to stop."""
+        self._continuous_running = False
+
+
+# ---------------------------------------------------------------------------
+# Spaces YAML generator
+# ---------------------------------------------------------------------------
+
+# Adapter ID -> human-friendly device family name
+_ADAPTER_FAMILY_NAMES: dict[str, str] = {
+    "kincony.family": "kincony",
+    "shelly.gen2": "shelly",
+    "esphome.native": "esphome",
+    "hue.bridge": "hue",
+    "zigbee2mqtt.http": "zigbee",
+    "zwave.jsui": "zwave",
+    "matter.python": "matter",
+    "lutron.caseta": "lutron",
+    "mqtt.generic": "mqtt",
+    "modbus.tcp": "modbus",
+    "onvif.camera": "camera",
+    "knx.tunnel": "knx",
+    "bacnet.ip": "bacnet",
+    "opcua.client": "opcua",
+    "dnp3.tcp": "dnp3",
+}
+
+# Point class -> (capabilities, ai_access, safety_class)
+_POINT_CLASS_DEFAULTS: dict[str, tuple[list[str], str, str]] = {
+    "switch.state": (["binary_switch"], "full", "S1"),
+    "relay.state": (["binary_switch"], "full", "S1"),
+    "dimmer.level": (["dimmer", "binary_switch"], "full", "S1"),
+    "digital_input.state": (["binary_sensor"], "read_only", "S0"),
+    "analog_input.value": (["analog_input"], "read_only", "S0"),
+    "temperature.value": (["temperature_sensor"], "read_only", "S0"),
+    "humidity.value": (["humidity_sensor"], "read_only", "S0"),
+    "cover.position": (["cover"], "confirm_required", "S2"),
+    "lock.state": (["lock", "door_lock"], "blocked", "S3"),
+    "ir.transmitter": (["ir_transmitter"], "full", "S1"),
+    "button.event": (["binary_sensor"], "read_only", "S0"),
+    "dac.output": (["analog_output"], "full", "S1"),
+}
+
+
+def generate_spaces_yaml(
+    snapshots: list[tuple[dict, InventorySnapshot]],
+    site_name: str = "my_home",
+    default_space: str = "main",
+) -> dict[str, Any]:
+    """Generate a spaces.yaml dict from commissioned inventory snapshots.
+
+    Groups endpoints by device, creates semantic names from the point metadata,
+    and assigns sensible defaults for capabilities, ai_access, and safety_class.
+    """
+    spaces: dict[str, dict] = {}
+    space_devices: dict[str, dict] = {}
+
+    for comm_info, snapshot in snapshots:
+        conn_id = comm_info.get("connection_id", "")
+        adapter_id = comm_info.get("adapter_id", "")
+        address = comm_info.get("address", "")
+        family = _ADAPTER_FAMILY_NAMES.get(adapter_id, adapter_id.split(".")[0])
+
+        # Use device name from inventory, or derive from adapter family
+        for device in snapshot.devices:
+            device_name = device.get("name", family).lower().replace(" ", "_")
+            device_id = device.get("device_id", "")
+
+            # Find all points for this device
+            device_endpoints = [
+                ep for ep in snapshot.endpoints
+                if ep.get("device_id") == device_id
+            ]
+            device_points = [
+                pt for pt in snapshot.points
+                if any(pt.get("endpoint_id") == ep.get("endpoint_id")
+                       for ep in device_endpoints)
+            ]
+
+            # Create a space for this device (using address-based grouping)
+            space_key = default_space
+            if not space_devices.get(space_key):
+                space_devices[space_key] = {}
+
+            for point in device_points:
+                point_id = point.get("point_id", "")
+                point_class = point.get("point_class", "")
+                endpoint_id = point.get("endpoint_id", "")
+                value_type = point.get("value_type", "str")
+                unit = point.get("unit")
+                writable = point.get("writable", False)
+                native_ref = point.get("native_ref", "")
+
+                # Generate semantic device name from the point
+                dev_key = _point_to_semantic_name(
+                    point_class, native_ref, endpoint_id, device_name, family
+                )
+
+                # Look up defaults
+                caps, ai_access, safety = _POINT_CLASS_DEFAULTS.get(
+                    point_class, (["binary_switch"] if writable else ["binary_sensor"],
+                                  "full" if writable else "read_only",
+                                  "S1" if writable else "S0")
+                )
+
+                device_entry: dict[str, Any] = {
+                    "point_id": point_id,
+                    "connection_id": conn_id,
+                    "endpoint_id": endpoint_id,
+                    "device_id": device_id,
+                    "capabilities": caps,
+                    "ai_access": ai_access,
+                    "safety_class": safety,
+                    "value_type": value_type,
+                }
+                if unit:
+                    device_entry["unit"] = unit
+
+                space_devices[space_key][dev_key] = device_entry
+
+    # Build the final YAML structure
+    for space_key, devices in space_devices.items():
+        spaces[space_key] = {
+            "display_name": space_key.replace("_", " ").title(),
+            "devices": devices,
+        }
+
+    return {"site": site_name, "spaces": spaces}
+
+
+def _point_to_semantic_name(
+    point_class: str, native_ref: str, endpoint_id: str,
+    device_name: str, family: str,
+) -> str:
+    """Generate a human-friendly semantic name from point metadata."""
+    # Try to extract a meaningful name from point_class
+    # e.g. "switch.state" -> "relay_1" using native_ref like "relay_1"
+    if native_ref:
+        # Clean up native ref to be a valid identifier
+        clean = native_ref.lower().replace(" ", "_").replace("-", "_")
+        clean = clean.replace(".", "_")
+        # Prefix with family if not already
+        if not clean.startswith(family):
+            return f"{family}_{clean}"
+        return clean
+
+    # Fall back to endpoint_id-based naming
+    if endpoint_id:
+        # Strip the device prefix from endpoint_id
+        parts = endpoint_id.split("_")
+        # Take the last meaningful parts
+        if len(parts) > 3:
+            return "_".join(parts[-3:])
+        return endpoint_id.replace(".", "_")
+
+    return f"{family}_{device_name}"

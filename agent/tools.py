@@ -339,6 +339,29 @@ TOOL_DEFINITIONS = [
             "required": ["device"],
         },
     },
+    {
+        "name": "discover_devices",
+        "description": "Scan the local network for smart devices (lights, relays, sensors, etc.) using mDNS, SSDP, port scanning, and HTTP probing. Returns discovered devices with their adapter type and address.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "methods": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Discovery protocols to use. Options: 'mdns', 'ssdp', 'port_scan', 'http_probe'. Default: all.",
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": "Scan timeout in seconds. Default 15.",
+                },
+                "auto_commission": {
+                    "type": "boolean",
+                    "description": "Automatically connect to discovered devices. Default false.",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -418,6 +441,7 @@ class ToolExecutor:
         self.intent_resolver: Any = None # IntentResolver
         self.suggester: Any = None       # ActionSuggester
         self.describer: Any = None       # CapabilityDescriber
+        self.network_scanner: Any = None # NetworkScanner
 
     def set_adapter_fns(self, read_fn: Any, execute_fn: Any) -> None:
         """Wire up the adapter registry functions."""
@@ -534,12 +558,17 @@ class ToolExecutor:
         if not self._execute_fn or not mapping.connection_id:
             return {"error": "No live connection available"}
 
-        # Build command
+        # Build command — translate semantic actions to adapter verbs
         params = {"value": value} if value is not None else {}
+        verb = action
         if action == "on":
             params["value"] = True
+            verb = "set"
         elif action == "off":
             params["value"] = False
+            verb = "set"
+        elif action == "toggle":
+            verb = "toggle"
 
         command = {
             "command_id": f"ai_cmd_{uuid.uuid4().hex[:8]}",
@@ -548,7 +577,7 @@ class ToolExecutor:
                 "device_id": mapping.device_id,
             },
             "capability": self._resolve_capability(mapping.capabilities, action, value),
-            "verb": action,
+            "verb": verb,
             "params": params,
             "context": {"initiator": "ai_agent"},
         }
@@ -804,3 +833,33 @@ class ToolExecutor:
             return {"error": "Describer not configured"}
         device = args.get("device", "")
         return self.describer.describe(device)
+
+    async def _tool_discover_devices(self, args: dict) -> dict:
+        if not self.network_scanner:
+            return {"error": "Network scanner not configured"}
+        methods = args.get("methods")
+        timeout = args.get("timeout", 15.0)
+        auto_commission = args.get("auto_commission", False)
+
+        if auto_commission:
+            summary = await self.network_scanner.scan_and_commission(
+                methods=methods, timeout=timeout, auto_commission=True,
+            )
+            return summary
+        else:
+            targets = await self.network_scanner.scan(
+                methods=methods, timeout=timeout,
+            )
+            return {
+                "targets_found": len(targets),
+                "targets": [
+                    {
+                        "adapter_id": t.adapter_id,
+                        "title": t.title,
+                        "address": t.address,
+                        "confidence": t.confidence,
+                        "protocol": t.fingerprint.get("protocol", "unknown"),
+                    }
+                    for t in targets
+                ],
+            }

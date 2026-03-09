@@ -697,6 +697,10 @@ def create_api(
     _tool_executor.suggester = _suggester
     _tool_executor.describer = _describer
 
+    # Network scanner for agent-driven discovery
+    from core.network_scanner import NetworkScanner
+    _tool_executor.network_scanner = NetworkScanner(registry=registry)
+
     @app.get("/api/agent/spaces")
     async def agent_list_spaces(_key: str = Depends(verify_api_key)):
         """List all spaces and their devices."""

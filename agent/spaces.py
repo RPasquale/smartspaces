@@ -72,6 +72,13 @@ class SpaceRegistry:
         self._by_semantic: dict[str, DeviceMapping] = {}
         self._by_point_id: dict[str, DeviceMapping] = {}
 
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "SpaceRegistry":
+        """Create a SpaceRegistry and load from a YAML file."""
+        registry = cls()
+        registry.load_yaml(path)
+        return registry
+
     def load_yaml(self, path: str | Path) -> None:
         """Load space definitions from a YAML file."""
         with open(path) as f:

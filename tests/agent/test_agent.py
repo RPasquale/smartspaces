@@ -459,7 +459,7 @@ class TestMCPServer:
             "jsonrpc": "2.0", "id": 4, "method": "resources/list", "params": {},
         })
         resources = resp["result"]["resources"]
-        assert len(resources) == 2
+        assert len(resources) == 3
 
     async def test_resources_read_devices(self, mcp):
         resp = await mcp.handle_message({
